@@ -25,6 +25,22 @@
   원하면 `Triggered` 핀을 써야 한다. 다만 같은 키에 `Completed`/`Canceled`로
   상태를 원상복구하는 로직이 있으면 `Started`를 써도 결과적으로는 크게
   문제되지 않는다 (지금 Sprint 구현이 이 경우).
+- 이벤트 그래프에서 노드를 코멘트 박스로 정리(드래그로 묶기)하다가
+  실행선이 실수로 끊어질 수 있다 — `IA_LockOn → ToggleLockOn` 연결이 한 번
+  이렇게 끊어졌었다. 정리 작업 후엔 `get_connected_subgraph`로 실행선이
+  살아있는지 재확인하는 습관을 들일 것.
+- 리터럴 값(Enum 드롭다운 등) 설정 실수는 컴파일 에러로 안 잡힌다 —
+  `ToggleLockOn`의 `SetMovementMode` 노드가 `NewEnumerator1`(LockOn)이어야
+  할 자리에 `NewEnumerator0`(Free)이 박혀 있던 버그가 실제 사례. 증상은
+  "일부 로직(LockOnTarget)은 정상 작동하는데 최종 상태(MovementMode)만
+  안 바뀜"처럼 헷갈리게 나타난다. PIE에서 이상하면 그래프 실행선뿐 아니라
+  각 노드의 입력 핀 리터럴 값도 `get_node_infos`로 직접 확인할 것.
+- MCP엔 "액터의 블루프린트 함수를 직접 호출"하는 툴이 없다 (Enhanced Input
+  키 입력도 MCP로 주입 불가). PIE에서 함수 로직을 검증하려면, 그 함수가
+  실제로 만들어내는 상태 변화를 `set_properties`로 동일하게 재현한 뒤
+  Tick 기반 후속 로직(회전, 속도 등)이 맞게 반응하는지 관찰하는 방식으로
+  우회한다 — 그래프 자체의 배선/값 정확성은 `get_connected_subgraph`/
+  `get_node_infos`로 정적 검증한다.
 
 ## 진행 상황 (2026-09-01 기준)
 
@@ -36,7 +52,11 @@
 ✔ 완료   IA_Dodge(Shift) / IA_LockOn(마우스 휠) / IMC_Player_Combat, 자동 등록
 ✔ 완료   E_PlayerMovementMode / E_ActionState Enum, BP_Player_Combat 변수로 추가
 ✔ 완료   ToggleLockOn 함수 — Free⇄LockOn 전환, BP_TrainingDummy를
-         LockOnTarget으로 저장, PIE에서 실제 작동 확인함 (구현 순서 6번)
+         LockOnTarget으로 저장 (구현 순서 6번)
+✔ 완료   UpdateLockOnRotation — LockOn 중 매 틱 타겟 방향으로 부드럽게
+         회전(RInterpTo), bOrientRotationToMovement Free↔LockOn 자동 전환.
+         PIE 시뮬레이션으로 상태 전환·회전 각도·Sprint 병행·복귀까지 전부
+         검증 완료 (2026-09-01)
 ✔ 완료   Dodge(B/L/R)·Trot(8방향) 애니메이션 임포트 + 우리 스켈레톤으로
          리타겟 완료 (`/Game/BossArena/Animations`)
 ✔ 완료   Sprint — IA_Sprint(Shift Hold, 0.25초) + IA_Dodge(Shift Tap,
