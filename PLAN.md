@@ -76,6 +76,8 @@ PlayerRoot
 ├─ Free
 │  ├─ Idle
 │  ├─ Move
+│  │  ├─ Walk    (기본)
+│  │  └─ Sprint  (Shift 홀드)
 │  └─ CombatAction
 │     ├─ Dodge     (자유 모션)
 │     ├─ Guard     (자유 모션)
@@ -84,6 +86,8 @@ PlayerRoot
 ├─ LockOn
 │  ├─ CombatIdle
 │  ├─ CombatMove8Dir
+│  │  ├─ Trot    (기본)
+│  │  └─ Sprint  (Shift 홀드)
 │  └─ CombatAction
 │     ├─ Dodge     (복싱 모션)
 │     ├─ Guard     (복싱 모션)
@@ -93,6 +97,10 @@ PlayerRoot
    ├─ Hit
    └─ Dead
 ```
+
+`Move`/`CombatMove8Dir` 밑의 `Walk`·`Sprint`(`Trot`·`Sprint`)는 **그림
+표현일 뿐, 별도 `ActionState` 값이 아니다** — 아래 "세 번째 독립 축"
+참고.
 
 실제 구현은 이 그림을 두 층으로 나눠서 반영한다.
 
