@@ -15,6 +15,16 @@
   `DefaultKeyMappings.Mappings`엔 안 들어간 상태다.
 - Enum 애셋(`UserDefinedEnum`)은 MCP 도구로 생성이 안 된다 — 에디터에서
   직접 만들어야 한다 (블루프린트 → 열거형).
+- `InputMappingContext`의 `Triggers`(Tap/Hold 등)는 인스턴스 서브오브젝트라
+  MCP로 새로 못 만든다 — 에디터에서 직접 추가해야 한다. 매핑 배열에 새
+  항목을 추가할 때는, 기존 항목들의 트리거 참조(`InputTriggerTap_0` 등)를
+  그대로 포함해서 배열 전체를 다시 써야 한다 — 일부만 바꾸면 "삽입 위치가
+  모호하다"는 에러가 난다.
+- Enhanced Input의 `Hold` 트리거를 쓸 때 `Started` 핀은 **누른 순간 즉시**
+  발동한다 (Hold 시간을 채우기 전에도). 정말 "그 시간만큼 눌러야 발동"을
+  원하면 `Triggered` 핀을 써야 한다. 다만 같은 키에 `Completed`/`Canceled`로
+  상태를 원상복구하는 로직이 있으면 `Started`를 써도 결과적으로는 크게
+  문제되지 않는다 (지금 Sprint 구현이 이 경우).
 
 ## 진행 상황 (2026-09-01 기준)
 
@@ -29,8 +39,11 @@
          LockOnTarget으로 저장, PIE에서 실제 작동 확인함 (구현 순서 6번)
 ✔ 완료   Dodge(B/L/R)·Trot(8방향) 애니메이션 임포트 + 우리 스켈레톤으로
          리타겟 완료 (`/Game/BossArena/Animations`)
-← 다음   락온 중 타겟 방향 회전 + 8방향 이동/애니메이션 + Sprint(Shift 홀드)
-         (구현 순서 7번, Sprint 포함해서 같이 진행)
+✔ 완료   Sprint — IA_Sprint(Shift Hold, 0.25초) + IA_Dodge(Shift Tap,
+         0.2초) 트리거 분리, bIsSprinting/SetSprinting으로 MaxWalkSpeed
+         600↔900 전환, PIE에서 체감 속도 증가 확인함
+← 다음   락온 중 타겟 방향 회전 + 8방향 이동/애니메이션 연결
+         (구현 순서 7번 — Sprint는 끝났고 8방향 이동만 남음)
 ← 이후   더킹 → ABP_Player_Combat → 입력 버퍼/취소 구간
 ```
 
@@ -294,8 +307,8 @@ State가 열리는 시점(`Play Montage`의 `On Notify Begin` 델리게이트로
 │  └─ Notifies                     ← 아직
 │
 ├─ Input
-│  ├─ IA_Dodge                     ✔ 완료 (Left Shift, Tap 트리거로 변경 예정)
-│  ├─ IA_Sprint                    ← 아직 (Left Shift, Hold 트리거)
+│  ├─ IA_Dodge                     ✔ 완료 (Left Shift, Tap 0.2초)
+│  ├─ IA_Sprint                    ✔ 완료 (Left Shift, Hold 0.25초)
 │  ├─ IA_LockOn                    ✔ 완료 (Middle Mouse Button)
 │  └─ IMC_Player_Combat            ✔ 완료
 │
