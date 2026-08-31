@@ -1,0 +1,21 @@
+# Unreal Engine generated/build folders
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vs/
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# Compiled source
+*.obj
+*.o
+*.pch
+
+# OS
+.DS_Store
+Thumbs.db
