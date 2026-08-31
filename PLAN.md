@@ -27,8 +27,10 @@
 ✔ 완료   E_PlayerMovementMode / E_ActionState Enum, BP_Player_Combat 변수로 추가
 ✔ 완료   ToggleLockOn 함수 — Free⇄LockOn 전환, BP_TrainingDummy를
          LockOnTarget으로 저장, PIE에서 실제 작동 확인함 (구현 순서 6번)
-← 다음   락온 중 타겟 방향으로 캐릭터 회전 + 8방향 이동/애니메이션 연결
-         (구현 순서 7번)
+✔ 완료   Dodge(B/L/R)·Trot(8방향) 애니메이션 임포트 + 우리 스켈레톤으로
+         리타겟 완료 (`/Game/BossArena/Animations`)
+← 다음   락온 중 타겟 방향 회전 + 8방향 이동/애니메이션 + Sprint(Shift 홀드)
+         (구현 순서 7번, Sprint 포함해서 같이 진행)
 ← 이후   더킹 → ABP_Player_Combat → 입력 버퍼/취소 구간
 ```
 
@@ -103,6 +105,19 @@ PlayerRoot
   Machine으로 그린다. `Free` 갈래 State Machine 하나, `LockOn` 갈래 State
   Machine 하나. 같은 `ActionState`라도 소속된 갈래(`MovementMode`)에 따라
   다른 애니메이션 세트를 재생한다.
+
+### 세 번째 독립 축 — Sprint
+
+`bIsSprinting`(Boolean)은 `ActionState`에 넣지 않는다. "지금 뭘 하는가"가
+아니라 "얼마나 빠르게 움직이는가"라서, `MovementMode`/`ActionState`와
+마찬가지로 완전히 독립된 축으로 둔다. `Free`/`LockOn` 어디서든 켜질 수
+있다 (락온 중에도 달리기 가능 — 확정 사항).
+
+```text
+Shift 키 하나를 두 입력으로 분리
+├─ Tap  (0.2초 이내 뗌) → IA_Dodge  → ActionState = Dodge
+└─ Hold (0.2초 이상 유지) → IA_Sprint → bIsSprinting = true (뗄 때까지)
+```
 
 피격과 사망은 모든 상태에서 우선 처리되는 전역 상태로 둔다 (표는 위 트리의
 `Global` 참고).
@@ -265,13 +280,14 @@ State가 열리는 시점(`Play Montage`의 `On Notify Begin` 델리게이트로
 │  ├─ ABP_Player_Combat            ← 아직
 │  ├─ BlendSpaces
 │  │  ├─ BS_Player_FreeMove        ← 아직
-│  │  └─ BS_Player_LockOn8Dir      ← 아직
+│  │  └─ BS_Player_LockOn8Dir      ← 아직 (원본 8방향 Trot은 준비됨)
 │  ├─ Montages
-│  │  ├─ AM_Player_Dodge_F/_B/_L/_R  ← 아직, 애니메이션 소스 필요
+│  │  ├─ AM_Player_Dodge_B/_L/_R   ← 아직 조립 전, 원본 준비됨 (F 없음)
 │  └─ Notifies                     ← 아직
 │
 ├─ Input
-│  ├─ IA_Dodge                     ✔ 완료 (Left Shift)
+│  ├─ IA_Dodge                     ✔ 완료 (Left Shift, Tap 트리거로 변경 예정)
+│  ├─ IA_Sprint                    ← 아직 (Left Shift, Hold 트리거)
 │  ├─ IA_LockOn                    ✔ 완료 (Middle Mouse Button)
 │  └─ IMC_Player_Combat            ✔ 완료
 │
@@ -280,6 +296,18 @@ State가 열리는 시점(`Play Montage`의 `On Notify Begin` 델리게이트로
 │
 └─ Debug                           ← 아직
 ```
+
+**원본 애니메이션 소스**는 `/Game/BossArena/Animations`에 있다 (Player 폴더
+밖 — 사용자가 임포트한 원본 팩 위치, 위 규칙의 예외로 둔다).
+
+```text
+/Game/BossArena/Animations
+├─ Dodge/   AM_Dodge-B/L/R, AS_Dodge-B/L/R   (우리 스켈레톤으로 리타겟 완료)
+└─ Trot/    AS_Trot-F/FL/FR/R/BR/B/BL/L      (8방향, 리타겟 완료)
+```
+
+여기서 `BS_Player_LockOn8Dir`, `AM_Player_Dodge_*` 몽타주를 조립해서
+`Player/Animation/`에 최종본을 만든다.
 
 `BP_Player_Combat`은 게임플레이 상태·입력·판정을 담당한다.
 `ABP_Player_Combat`은 상태값을 받아 포즈와 애니메이션만 출력한다.
@@ -294,7 +322,8 @@ State가 열리는 시점(`Play Montage`의 `On Notify Begin` 델리게이트로
 5. 이동·락온·더킹 입력 연결 — ✔ 완료 (IA/IMC 생성·매핑·자동등록까지)
 6. `PlayerRoot → Free/LockOn` HFSM 구성 — ✔ 완료 (Enum 변수 + ToggleLockOn,
    PIE 검증함)
-7. 락온 전투 Idle과 8방향 이동 연결 — ← 다음 순서
+7. 락온 전투 Idle과 8방향 이동 연결 + Sprint(Shift Tap/Hold 분리) — ←
+   다음 순서
 8. 방향 스냅샷 기반 더킹 구현
 9. `Locomotion → Dodge → Locomotion` 복귀 검증
 10. `CombatAction` 하위에 Guard·Attack 상태 추가 (Free/LockOn 양쪽)
@@ -393,3 +422,12 @@ State가 열리는 시점(`Play Montage`의 `On Notify Begin` 델리게이트로
 - 플레이스홀더 자산은 검증 전에 영구 배선하지 않는다 (이동+애니메이션부터
   눈으로 확인 후 다음 단계).
 - 깔끔한 체크포인트마다 git 커밋한다.
+- **Sprint(달리기)는 Free/LockOn 양쪽에서 전부 가능하다** (확정, 락온 중에도
+  달릴 수 있어야 함). `ActionState`엔 안 넣고 `bIsSprinting`(Boolean)으로
+  독립 관리한다. `Shift`를 짧게 탭하면 `Dodge`, 길게 홀드하면 `Sprint` —
+  같은 물리 키를 Tap/Hold 트리거로 구분해서 쓴다 (구현 순서 7번에서 같이
+  작업).
+- 마켓플레이스에서 임포트한 애니메이션은 스켈레톤이 달라도(본 이름이
+  같으면) 언리얼 버전 차이와 무관하게 "리타겟 스켈레톤"으로 바로 쓸 수
+  있다. Dodge(B/L/R)·Trot(8방향) 완료. Dodge Forward, Sprint 전용
+  애니메이션은 아직 없음 — 필요해지면 그때 다시 다룬다.
