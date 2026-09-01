@@ -59,6 +59,24 @@
   실제로 어디를 보는지 확인하려면 `PlayerCameraManager` 액터의
   `get_actor_transform` 회전값을 대신 읽는다 (Pawn Control Rotation을
   쓰는 카메라 붐이면 이 값이 사실상 ControlRotation과 같다).
+- **AnimGraph 작업 시 유용한 패턴들** (ABP_Player_Combat 작업에서 확인):
+  - Enum 전용 블렌드 노드(`BlendPoses(내열거형)`)는 커스텀 Enum의 항목
+    수만큼 자동으로 핀이 안 생기고 `add_node_pin`도 지원 안 함 — 대신
+    **`부울로포즈블렌딩`(Blend Poses by bool)**을 쓰고 조건을 bool 변수로
+    미리 계산해두는 게 훨씬 안전하다.
+  - `부울로포즈블렌딩`의 `BlendPose_0`/`BlendPose_1`은 이름만 보면
+    False/True 순서로 착각하기 쉬운데, **실제로는 `BlendPose_0` =
+    `bActiveValue == true`, `BlendPose_1` = `false`** 다 (실제 PIE에서
+    반대로 나와서 스왑하고서야 확인함). 헷갈리면 일단 연결하고 PIE로
+    검증할 것.
+  - 블렌드 스페이스/시퀀스를 재생하는 AnimGraph 노드는, 그 애셋이 그
+    애님 블루프린트 안에서 이미 한 번이라도 쓰인 적 있어야
+    `find_node_types`에 특화된 타입(`...플레이어'애셋이름'`)으로 뜬다.
+    처음 쓰는 애셋이면 그 특화 타입은 아직 없다 — 대신 범용
+    `애니메이션|시퀀스|시퀀스플레이어`(또는 블렌드스페이스플레이어)를
+    만든 뒤, `ObjectTools.set_properties`로 그 노드의 `node.sequence`
+    (또는 블렌드 스페이스 노드는 애셋 참조 프로퍼티)를 직접 지정하면
+    된다 — 핀이 아니라 노드 자체의 프로퍼티라는 점에 주의.
 
 ## 진행 상황 (2026-09-01 기준)
 
@@ -86,11 +104,22 @@
          검증함 (2026-09-01)
 ✖ 실패→보류 BS_Player_LockOn8Dir(8방향 Trot 블렌드 스페이스)를
          set_properties로 직접 조립하려다 에디터 크래시 — "알아둘 것"
-         참고. 에디터 UI에서 직접 만들어야 함
-← 다음   락온 8방향 이동/애니메이션 연결 — 블렌드 스페이스는 에디터에서
-         사용자가 직접 만들고, ABP_Player_Combat 연결은 그다음 진행
-         (구현 순서 7번)
-← 이후   더킹 → 입력 버퍼/취소 구간
+         참고. 에디터 UI에서 직접 만듦 (사용자가 축 세팅 + 8방향 샘플 배치)
+✔ 완료   BS_Player_LockOn8Dir 완성 (에디터 UI로 제작, Direction -180~180
+         8분할, AS_Trot-* 8개 + 후방 중복 샘플 총 9개)
+✔ 완료   ABP_Player_Combat 생성 (ABP_Unarmed 복제) + AnimGraph 연결 —
+         `부울로포즈블렌딩` 2단 구조: 바깥쪽은 MovementMode 기반
+         Free/LockOn 분기, 안쪽은 LockOn일 때 ShouldMove 기반
+         CombatIdle(AS_Idle)/CombatMove8Dir(BS_Player_LockOn8Dir) 분기.
+         EventGraph에 bIsLockedOn 변수 추가(Character→BP_Player_Combat
+         캐스트 후 MovementMode==LockOn 비교). 기존 Direction/GroundSpeed/
+         ShouldMove 변수는 템플릿이 이미 계산해두던 것을 그대로 재사용.
+         BP_Player_Combat의 AnimClass를 ABP_Unarmed→ABP_Player_Combat로
+         교체. PIE에서 락온 Idle/Move 전환 확인함 (구현 순서 7번 완료,
+         2026-09-01)
+← 다음   방향 스냅샷 기반 더킹 구현 (구현 순서 8번)
+← 이후   ActionState/CombatAction(Dodge→Locomotion 복귀) → Guard/Attack →
+         입력 버퍼/취소 구간
 ```
 
 세부 히스토리(마이그레이션, 레거시 정리 등)는 git 커밋 로그 참고 — 여기엔
@@ -344,10 +373,10 @@ State가 열리는 시점(`Play Montage`의 `On Notify Begin` 델리게이트로
 │  └─ E_ActionState                ✔ 생성됨 (항목 채우는 중)
 │
 ├─ Animation
-│  ├─ ABP_Player_Combat            ← 아직
+│  ├─ ABP_Player_Combat            ✔ 완료 (ABP_Unarmed 복제 + AnimGraph 연결)
 │  ├─ BlendSpaces
-│  │  ├─ BS_Player_FreeMove        ← 아직
-│  │  └─ BS_Player_LockOn8Dir      ← 아직 (원본 8방향 Trot은 준비됨)
+│  │  ├─ BS_Player_FreeMove        ← 아직 (Free는 템플릿 BS_Idle_Walk_Run 그대로 사용 중)
+│  │  └─ BS_Player_LockOn8Dir      ✔ 완료 (Direction -180~180, 8분할)
 │  ├─ Montages
 │  │  ├─ AM_Player_Dodge_B/_L/_R   ← 아직 조립 전, 원본 준비됨 (F 없음)
 │  └─ Notifies                     ← 아직
@@ -389,8 +418,8 @@ State가 열리는 시점(`Play Montage`의 `On Notify Begin` 델리게이트로
 5. 이동·락온·더킹 입력 연결 — ✔ 완료 (IA/IMC 생성·매핑·자동등록까지)
 6. `PlayerRoot → Free/LockOn` HFSM 구성 — ✔ 완료 (Enum 변수 + ToggleLockOn,
    PIE 검증함)
-7. 락온 전투 Idle과 8방향 이동 연결 + Sprint(Shift Tap/Hold 분리) — ←
-   다음 순서
+7. 락온 전투 Idle과 8방향 이동 연결 + Sprint(Shift Tap/Hold 분리) — ✔
+   완료 (BS_Player_LockOn8Dir + ABP_Player_Combat)
 8. 방향 스냅샷 기반 더킹 구현
 9. `Locomotion → Dodge → Locomotion` 복귀 검증
 10. `CombatAction` 하위에 Guard·Attack 상태 추가 (Free/LockOn 양쪽)
