@@ -41,6 +41,24 @@
   Tick 기반 후속 로직(회전, 속도 등)이 맞게 반응하는지 관찰하는 방식으로
   우회한다 — 그래프 자체의 배선/값 정확성은 `get_connected_subgraph`/
   `get_node_infos`로 정적 검증한다.
+- **`BlendSpace`(및 아마 `AnimBlueprint`의 AnimGraph 등 파생 캐시를 갖는
+  애셋 전반)의 `sampleData`/`blendParameters` 같은 복합 프로퍼티는
+  `ObjectTools.set_properties`로 직접 덮어쓰면 안 된다 — 절대 안전하지
+  않음, 실제로 에디터가 크래시남.** 블렌드 스페이스는 그리드 보간용 내부
+  캐시를 별도로 들고 있는데, 리플렉션으로 `sampleData`만 갈아끼우면 이
+  캐시가 어긋나서 저장 시점에 `Array index out of bounds` 어써션으로 즉시
+  크래시가 난다 (2026-09-01 실제 발생, `BS_Player_LockOn8Dir` 작업 중).
+  다행히 크래시가 `save_assets` 시점에 나서 손상된 파일이 디스크에
+  저장되지는 않았지만, 시도 자체가 위험하다. **블렌드 스페이스/애님
+  블루프린트의 AnimGraph 내부 편집은 Enum 생성처럼 MCP가 못 하는 작업으로
+  취급하고, 에디터 UI에서 직접 만들어야 한다.** (Blueprint의 EventGraph는
+  일반 K2 그래프라 기존 방식대로 MCP로 편집 가능 — 위험한 건 AnimGraph/
+  BlendSpace 전용 파생 데이터 쪽.)
+- `AController.ControlRotation`은 리플렉션으로 읽을 수 없다 (protected,
+  BlueprintReadWrite 아님) — `get_properties`로 직접 조회 불가. 카메라가
+  실제로 어디를 보는지 확인하려면 `PlayerCameraManager` 액터의
+  `get_actor_transform` 회전값을 대신 읽는다 (Pawn Control Rotation을
+  쓰는 카메라 붐이면 이 값이 사실상 ControlRotation과 같다).
 
 ## 진행 상황 (2026-09-01 기준)
 
@@ -62,9 +80,17 @@
 ✔ 완료   Sprint — IA_Sprint(Shift Hold, 0.25초) + IA_Dodge(Shift Tap,
          0.2초) 트리거 분리, bIsSprinting/SetSprinting으로 MaxWalkSpeed
          600↔900 전환, PIE에서 체감 속도 증가 확인함
-← 다음   락온 중 타겟 방향 회전 + 8방향 이동/애니메이션 연결
-         (구현 순서 7번 — Sprint는 끝났고 8방향 이동만 남음)
-← 이후   더킹 → ABP_Player_Combat → 입력 버퍼/취소 구간
+✔ 완료   락온 중 카메라도 타겟 방향으로 같이 회전 — Controller의
+         ControlRotation을 몸통과 같은 TargetYaw로 RInterpTo, Pitch는
+         플레이어 마우스 조작 그대로 유지. PlayerCameraManager 회전값으로
+         검증함 (2026-09-01)
+✖ 실패→보류 BS_Player_LockOn8Dir(8방향 Trot 블렌드 스페이스)를
+         set_properties로 직접 조립하려다 에디터 크래시 — "알아둘 것"
+         참고. 에디터 UI에서 직접 만들어야 함
+← 다음   락온 8방향 이동/애니메이션 연결 — 블렌드 스페이스는 에디터에서
+         사용자가 직접 만들고, ABP_Player_Combat 연결은 그다음 진행
+         (구현 순서 7번)
+← 이후   더킹 → 입력 버퍼/취소 구간
 ```
 
 세부 히스토리(마이그레이션, 레거시 정리 등)는 git 커밋 로그 참고 — 여기엔
