@@ -118,9 +118,79 @@
   `Set...`만 계속 나오면, 힌트 핀의 방향을 `EGPD_Input`으로 바꿔서
   다시 검색해볼 것.
 
-## 진행 상황 (2026-09-01 기준)
+## 진행 상황 (2026-09-07 기준)
 
-기반 공사 + 락온 토글까지 끝났다.
+전투 코어(락온 / 회피 / 4타 콤보 + 입력 버퍼)까지 구현 완료. 남은 건
+가드·히트박스·연출.
+
+```
+[기반]
+✔ BP_Player_Combat / BP_PlayerController_Combat / BP_BossArenaGameMode
+✔ Lvl_Arena_01 시작 맵 지정, PIE 스폰 확인
+✔ IA_Move / IA_Look / IA_Sprint / IA_Dodge / IA_LockOn / IA_Attack + IMC
+✔ E_PlayerMovementMode / E_ActionState
+
+[이동 · 락온]
+✔ ToggleLockOn — Free⇄LockOn 전환, BP_TrainingDummy를 타겟으로 저장
+✔ UpdateLockOnRotation — 몸통 RInterpTo, bOrientRotationToMovement 자동 전환
+✔ 락온 카메라 동조 — ControlRotation Yaw 추종, Pitch는 마우스 유지
+✔ Sprint — Shift Hold(0.25초)/Tap(0.2초) 트리거 분리, 600↔900
+✔ BS_Player_LockOn8Dir (에디터 UI 제작) + ABP_Player_Combat 2단 블렌드
+
+[회피]
+✔ Dodge (락온용) — A_INP_Dodge_01_* 10종, InPlace + 코드 이동
+✔ Roll (Free용) — A_Roll_Idle* 8방향, RootMotion (2026-09-07 전환)
+✔ 2단계 배속 — DodgeBurstRate(초반 3배) → DodgePlayRate
+✔ 방향 판정 트리 — CalculateDirection 각도 → 8방향 Select 체인
+✔ 회피 쿨타임 — DodgeCooldown, 복귀 시점부터 카운트 (2026-09-07)
+
+[공격]
+✔ 4타 콤보 — AttackMontages 배열 소비 방식, 좌클릭 1회 = 1타
+✔ 세키로식 입력 버퍼 — bAttackBuffered / bComboWindowOpen,
+  콤보 창(ComboWindowRatio 0.55) 이전 입력도 버퍼링 후 자동 발동
+✔ OnComboWindowOpen / OnAttackRecoveryTimer 타이머 체계
+
+[상태 제약]
+✔ 공중(점프 중) 회피·공격 차단 — IsFalling 게이트 (2026-09-07)
+
+[전투 판정]
+✔ 히트박스 · 데미지 — ApplyRadialDamage 구체 판정, 몽타주 진행률 기준
+✔ BP_TrainingDummy 체력 / 피격 / 자동 리셋
+✔ 플레이어 체력 + 피격 처리
+
+[가드]
+✔ 가드(Block) — AS_Block, 홀드 방식, 데미지 감쇄
+✖ IMC_Player_Combat에 IA_Block 키 바인딩 필요 (에디터에서 직접)
+
+[체력 · 스태미나 · UI]
+✔ 플레이어 체력 320 / 스태미나 120 (DS3·세키로 수치 기반)
+✔ 스태미나 소모(회피 13 / 공격 18) · 지연 후 선형 재생(45/초)
+✔ WBP_PlayerHUD — 좌하단 체력/스태미나 바 + 9-slice 프레임 + 지연 데미지 바
+✔ 공격 히트 이펙트 (ParagonCrunch 임팩트)
+✔ 플레이어 사망 처리 (체력 0 → Dead → 입력 차단)
+
+✔ 무적 프레임 0.433초 (DS3 미들롤 13프레임)
+✔ 퍼펙트 회피 판정 + 잔상(고스트) VFX 3연속
+✔ 가드 중 하체 로코모션 (상체만 블렌딩)
+
+[남은 것]
+← 보스 AI (HFSM + Utility AI + GOAP) + 홀로그램 디버그 패널  ★ 포트폴리오 메인
+← 패링(가드 초반 프레임 = 퍼펙트 가드)
+← 히트스톱 · 피격 리액션 애니메이션
+← 방향 스냅샷 기반 더킹
+← 잔상(고스트) VFX, 카메라 연출
+← 보스 AI (공격이 있어야 가드/체력이 실제로 검증됨)
+```
+
+4타 전부 스켈레톤 리타게팅 완료 확인 (2026-09-07). 다만 `AM_Attack1_2`/
+`AM_Attack1_3` 몽타주는 BossArena의 `AS_Attack1_2`/`_3`이 아니라 UAF 원본
+(`AS_Cross-R` / `AS_Hook-L`)을 참조한다. 원본도 우리 스켈레톤으로
+리타게팅돼 있어 재생에는 문제 없지만, BossArena 쪽 사본 2개는 아무도
+참조하지 않는 상태다 — 정리 대상.
+
+### (이력) 2026-09-01 시점 체크리스트
+
+기반 공사 + 락온 토글까지 끝났던 시점의 기록.
 
 ```
 ✔ 완료   BP_Player_Combat / BP_PlayerController_Combat / BP_BossArenaGameMode
@@ -411,6 +481,567 @@ LockOn이든 똑같은 `A_INP_Dodge_01_*`(전투용, 복싱 자세) 10종 세트
   - **아직 남은 것 (보류, 다음에)**: 구르기(Roll) 동작 자체가
     "자연스럽지 않다"는 피드백 있음 — 어느 부분이 어색한지 아직
     구체화 안 함. 지금은 넘어가고 나중에 다시 다룸.
+
+### Roll을 RootMotion 세트로 전환 (2026-09-07)
+
+"구르기가 딱딱 끊긴다"는 피드백의 원인 중 하나가 **InPlace 애니메이션 +
+코드 이동**이라는 이원 구조였다 (포즈와 위치가 서로 다른 곡선으로 움직여서
+발이 미끄러짐). 이를 없애기 위해 Free 모드 회피(Roll) 8방향을
+**RootMotion 세트로 교체**했다.
+
+| | 이전 | 현재 |
+|---|---|---|
+| 애셋 | `A_INP_Roll_Idle*` (InPlace) | `A_Roll_Idle*` (RootMotion) |
+| 위치 이동 | Tick의 `SetActorLocation` (`DodgeDistance` 350cm) | 애니메이션에 구워진 루트 이동 |
+| 발 미끄러짐 | 있음 | 없음 |
+| 거리 조절 | 숫자로 자유롭게 | **불가 (아래 참고)** |
+
+**작업 내역**
+1. `/Game/Roll_Dodge_Dash_Set/SourceFiles/fbx/RootMotion/Mannequin/Roll/`의
+   8개를 `/Game/BossArena/Animations/Roll/`로 이동. 스켈레톤은 이미
+   프로젝트 것(`/Game/Characters/Mannequins/Meshes/SK_Mannequin`)이라
+   리타게팅 불필요했음.
+2. 8개 전부 `bEnableRootMotion = true`로 설정 (임포트 직후 기본 꺼짐 —
+   위 "알아둘 것"에 기록된 함정. 이번에도 그대로 재현됨).
+3. `TryEnterDodge`의 Roll 8개 리프 노드 애셋 경로만 교체. 방향 판정
+   트리(각도 임계값, Select 체인)는 손대지 않음.
+4. **코드 이동 차단**: `SetDodgeMoveDuration` 앞에
+   `SelectFloat(A=기존계산값, B=0.0, bPickA=EnumEquality_1)`을 삽입.
+   `EnumEquality_1`은 "MovementMode == LockOn" 판정으로, Roll 트리와
+   Dodge 트리를 고르는 데 이미 쓰이던 노드를 재사용한 것.
+   - LockOn(Dodge, InPlace) → 기존 코드 이동 그대로
+   - Free(Roll, RootMotion) → `DodgeMoveDuration = 0` → Tick의
+     `DodgeMoveElapsed < DodgeMoveDuration`이 항상 false → 코드 이동 없음
+   - 이걸 안 하면 루트모션과 코드 이동이 **동시에** 적용돼 두 배로 날아간다.
+5. `RootMotionMode`는 `ABP_Player_Combat`에 이미
+   `RootMotionFromMontagesOnly`로 설정돼 있었고,
+   `PlaySlotAnimationAsDynamicMontage`는 실제 몽타주를 만들므로 그대로 동작.
+
+**RootMotion 이동 거리 실측 (원본 FBX의 root 본 트랜슬레이션 커브 파싱)**
+
+| 애니메이션 | 수평 이동 |
+|---|---|
+| `A_Roll_IdleFwd` | 459.5 cm |
+| `A_Roll_IdleFwdLt_45` / `Rt_45` | 459.4 / 459.5 cm |
+| `A_Roll_IdleFwdLt_90` / `Rt_90` | 460.1 cm |
+| `A_Roll_IdleBwd` | 427.7 cm |
+| `A_Roll_IdleBwdLt_135` / `Rt_135` | 427.5 cm |
+
+8방향이 거의 균일하다 (427~460cm, 전부 1.0초). 기존 코드 이동값
+`DodgeDistance = 350cm`보다 **약 31% 더 멀다.**
+
+**이동 거리를 줄일 수 없는 이유 (확정)**
+
+UE 5.8 블루프린트에는 `SetAnimRootMotionTranslationScale` 노드가 **없다.**
+- `find_node_types`로 `RootMotion` / `AnimRootMotion` / `TranslationScale`
+  전부 검색 → `애니메이션|GetAnimRootMotionTranslationScale` (게터)만 존재.
+- `ACharacter::AnimRootMotionTranslationScale` 프로퍼티도 CDO에서
+  읽기/쓰기 모두 실패 (`could not be read` / `could not be set`).
+- 이 프로젝트 PLAN의 2026-09-03 기록("읽기 전용이라 배율 조절 불가")이
+  맞았다는 게 재확인됨.
+
+남은 방법은 **애셋에 직접 굽는 것** 하나뿐이다:
+`AnimationModifier` → `GetController` + `OpenBracket` →
+`GetDataModelInterface` → `GetBoneTrackByName("root")` →
+포지션 키 배열을 배율로 스케일 → `SetBoneTrackKeys` → `CloseBracket`.
+(필요한 노드가 전부 존재하는 것은 확인함.)
+
+**단, 이 방법은 트레이드오프가 있다.** 루트 키를 0.7배로 줄이면 포즈는
+"460cm 굴렀다"고 말하는데 실제로는 322cm만 가므로, **RootMotion으로
+없앴던 발 미끄러짐이 30%만큼 그대로 되돌아온다.** 즉 거리를 줄이는 순간
+RootMotion 전환의 이득 일부를 반납하는 셈. 그래서 먼저 100%(460cm)로
+체감해보고 결정하는 것이 맞다.
+
+**남은 것**
+- `A_INP_Roll_Idle*` 8개는 이제 아무 데서도 참조되지 않는다 (롤백 대비로
+  일단 남겨둠). 확정되면 삭제.
+- 거리 축소가 필요하다고 결론나면 위 AnimationModifier를 만든다.
+  적용은 콘텐츠 브라우저에서 수동이며, **두 번 적용하면 0.49배로 겹친다**는
+  점을 주의.
+
+### 상태 제약 — 공중 차단 + 회피 쿨타임 (2026-09-07)
+
+#### 1. 점프 중 회피·공격 차단
+
+캐릭터가 공중에 떠 있는 동안(점프, 낙하, 턱에서 걸어나감 전부 포함)
+회피와 공격이 나가지 않도록 함수 진입부에 게이트를 달았다.
+
+판정은 `GetCharacterMovement → IsFalling`. `IsFalling`은 점프해서
+올라가는 중과 떨어지는 중을 모두 true로 잡으므로 "발이 땅에 안 닿아
+있으면 못 한다"는 의도와 정확히 맞는다.
+
+- **`TryEnterAttack`**: `FunctionEntry → Branch(IsFalling)`
+  - `then`(공중) → 아무 데도 안 감 = 공격 취소
+  - `else`(지상) → 기존 `IfThenElse_0`(ActionState 판정)로 그대로 이어짐
+- **`TryEnterDodge`**: 같은 방식 + 쿨타임 판정까지 2단
+  ```
+  FunctionEntry
+    → Branch(IsFalling)          then=차단 / else↓
+      → Branch(bDodgeOnCooldown) then=차단 / else↓
+        → 기존 IfThenElse_0 → SetActionState(Dodge) → ...
+  ```
+
+`Not`/`And` 노드를 쓰지 않고 **Branch의 `else` 핀을 통과 경로로** 쓴 이유:
+이 프로젝트의 MCP 도구로는 프로모터블 연산자 노드(`Not`, `And` 등) 생성이
+막혀 있다 (아래 "MCP 제약" 참고). Branch 두 개를 세로로 잇는 게
+노드 수도 같고 그래프에서 읽기도 더 쉽다.
+
+#### 2. 회피 쿨타임
+
+연타로 구르기를 도배하는 걸 막는다.
+
+| 변수 | 카테고리 | 의미 | 초기값 |
+|---|---|---|---|
+| `DodgeCooldown` | CombatTuning (Instance Editable) | 회피가 끝난 뒤 다시 회피 가능해지기까지 (초) | 0.25 |
+| `bDodgeOnCooldown` | Combat State | 지금 쿨타임 중인지 | false |
+
+**카운트 시작 지점을 "회피 시작"이 아니라 "회피 복귀"로 잡았다.**
+회피 재생 시간은 `DodgePlayRate`/`DodgeBurstRate`를 만질 때마다 달라지는데,
+시작 기준으로 잡으면 쿨타임 값이 재생 시간보다 짧아지는 순간 아무 효과도
+없어진다. 복귀 기준이면 `DodgeCooldown`이 그대로 "구르고 나서 쉬는 시간"이라
+배속을 어떻게 바꾸든 의미가 변하지 않는다.
+
+흐름:
+```
+OnDodgeRecoveryTimer (기존)
+  → SetActionState(Locomotion)      (기존)
+  → SetbDodgeOnCooldown(true)       (신규)
+  → SetTimerByFunctionName("OnDodgeCooldownEnd", DodgeCooldown)  (신규)
+
+OnDodgeCooldownEnd (신규 커스텀 이벤트)
+  → SetbDodgeOnCooldown(false)
+```
+
+튜닝은 디테일 패널의 CombatTuning에서 `DodgeCooldown` 숫자만 바꾸면 된다.
+0으로 두면 쿨타임 없음(이전 동작)과 같다.
+
+## 히트박스 · 데미지 (2026-09-07)
+
+### 판정 방식 — 구체 하나, 타이머로 발동
+
+무기가 없는 맨손 전투라 무기 궤적 트레이스 대신 **캐릭터 앞쪽에 구체를
+하나 띄우고 그 안의 액터에게 데미지**를 준다. `ApplyRadialDamage` 노드
+하나가 구체 오버랩 + `TakeDamage` 호출까지 다 해준다.
+
+발동 시점은 **몽타주 진행률 기준 타이머**다. AnimNotify를 쓰지 않는 이유:
+이 프로젝트는 이미 콤보 창(`OnComboWindowOpen`)과 복귀(`OnAttackRecoveryTimer`)를
+전부 `SetTimerByFunctionName`으로 처리하고 있어서, 판정만 노티파이로 가면
+타이밍 관리가 두 군데로 쪼개진다. 4개 몽타주에 노티파이를 일일이 찍는
+수작업도 없어진다.
+
+```
+StartComboStep
+  → PlayAnimMontage
+  → SetTimer("OnComboWindowOpen",   길이/배속 × ComboWindowRatio)   기존
+  → SetTimer("OnAttackRecoveryTimer", 길이/배속)                     기존
+  → SetTimer("OnAttackHitCheck",     길이/배속 × AttackHitRatio)     신규
+```
+
+`OnAttackHitCheck` → `DoAttackHitCheck()`:
+
+```
+Branch(ActionState == Attack)        ← 회피 등으로 취소됐으면 판정 무효
+  → ApplyRadialDamage(
+       BaseDamage  = AttackDamage,
+       Origin      = TransformLocation(액터 트랜스폼, (AttackHitRange,0,0)),
+       DamageRadius= AttackHitRadius,
+       DamageCauser= self, InstigatedByController = GetController,
+       bDoFullDamage = true)
+  → Branch(bShowHitDebug) → DrawDebugSphere (판정 구체를 눈으로 확인)
+```
+
+`Origin`을 `위치 + 앞방향×거리`로 계산하지 않고 **`TransformLocation`으로
+로컬 오프셋을 월드로 변환**했다. MCP로는 `vector+vector` / `vector*float`
+같은 프로모터블 연산자 노드를 만들 수 없어서인데, 결과적으로 노드 3개가
+1개로 줄어 더 깔끔하다.
+
+| 변수 (CombatTuning) | 의미 | 초기값 |
+|---|---|---|
+| `AttackDamage` | 한 대 데미지 | 12 |
+| `AttackHitRange` | 캐릭터 앞 판정 중심까지 거리 (cm) | 130 |
+| `AttackHitRadius` | 판정 구 반지름 (cm) | 85 |
+| `AttackHitRatio` | 애니메이션 몇 % 지점에서 판정할지 | 0.35 |
+| `bShowHitDebug` | 판정 구체를 화면에 그릴지 | true |
+
+### 체력 처리 — 뺄셈 노드 없이 빼기
+
+MCP로 `float-float` 노드를 만들 수 없어서 이렇게 우회했다:
+
+```
+새체력 = Clamp( Lerp(현재체력, 0, SafeDivide(데미지, 현재체력)), 0, 최대체력 )
+```
+
+`Lerp(A,B,t) = A + (B-A)·t` 이므로 `B=0`, `t=데미지/현재체력`을 넣으면
+정확히 `현재체력 - 데미지`가 된다. `SafeDivide`라 현재체력이 0이어도
+0으로 나누기 사고가 안 난다.
+
+- **BP_TrainingDummy**: `MaxHealth` 200 / `CurrentHealth`.
+  `BeginPlay`에서 초기화, `Event AnyDamage`에서 차감 후 화면에 HP 출력,
+  0이 되면 "DUMMY DOWN" 출력 후 2초 뒤 `ResetDummy`로 체력 복구
+  (테스트를 계속 하려면 죽고 끝나는 것보다 리셋이 낫다).
+  메시는 `/Engine/BasicShapes/Cylinder`라 기본 콜리전이 있어 그대로 맞는다.
+- **BP_Player_Combat**: `MaxHealth` 100 / `CurrentHealth`. 아직 플레이어를
+  때리는 것이 없어서 검증은 보스 AI가 생긴 뒤에 가능하다.
+
+## 가드(Block) (2026-09-07)
+
+`/Game/BossArena/Animations/AS_Block` (3.92초, 우리 스켈레톤) 사용.
+**홀드 방식** — 누르고 있는 동안 막고, 떼면 풀린다.
+
+```
+IA_Block Started   → TryEnterBlock()
+IA_Block Completed → ExitBlock()
+```
+
+`TryEnterBlock`
+```
+Branch(IsFalling)                  then=차단
+  else → Branch(ActionState == Locomotion)   then↓
+    → ActionState = Guard
+    → PlaySlotAnimationAsDynamicMontage(AS_Block, 'DefaultSlot',
+         BlendIn 0.15 / BlendOut 0.25, LoopCount 999)
+    → ActiveBlockMontage = 반환된 몽타주
+```
+
+`ExitBlock`
+```
+Branch(ActionState == Guard)       ← 구르기 등으로 이미 상태가 바뀌었으면 아무것도 안 함
+  → MontageStop(ActiveBlockMontage, BlendOut 0.25)
+  → ActionState = Locomotion
+```
+
+애님 그래프(`ABP_Player_Combat`)는 **건드리지 않았다.** 회피·공격과 똑같이
+`DefaultSlot` 몽타주로 재생한다. 예전에 애님 그래프에 `LayeredBoneBlend`를
+넣었다가 공격이 통째로 죽은 사고가 있어서, 상태 추가는 전부 몽타주 슬롯
+방식으로 통일한다.
+
+### 데미지 감쇄
+
+`Event AnyDamage`에서:
+```
+받는데미지 = SelectFloat(
+    A = Lerp(0, 원래데미지, BlockDamageMultiplier),   ← 가드 중
+    B = 원래데미지,                                    ← 평상시
+    bPickA = (ActionState == Guard))
+```
+`Lerp(0, X, m) = X·m`이다 — 여기도 곱하기 노드를 못 만들어서 쓴 우회.
+
+| 변수 (CombatTuning) | 의미 | 초기값 |
+|---|---|---|
+| `MaxHealth` | 플레이어 최대 체력 | 100 |
+| `BlockDamageMultiplier` | 가드 중 받는 데미지 배율 | 0.2 |
+
+**한계 (의도적으로 안 넣음)**
+- **방향 판정 없음** — 지금은 뒤에서 맞아도 막힌다. 정면 각도 체크는
+  공격해오는 상대가 생긴 뒤에 붙이는 게 맞다.
+- **패링 없음** — 가드 진입 직후 몇 프레임을 퍼펙트 가드로 치는 건
+  다음 단계.
+- **스태미나/포이즈 없음.**
+
+### 남은 수동 작업 (에디터에서 직접)
+
+`IA_Block`은 만들어서 블루프린트에 다 연결해놨지만, **`IMC_Player_Combat`에
+키 바인딩만 사용자가 직접 넣어야 한다** (우클릭 권장).
+MCP로 `Mappings`를 읽으면 2개만 나오는데 저장된 애셋에는 4개가 들어 있다 —
+읽기 결과가 실제와 달라서, 그대로 덮어쓰면 기존 공격/스프린트 바인딩이
+날아간다. 그래서 자동화하지 않았다.
+
+## 체력 · 스태미나 수치 근거 (2026-09-07)
+
+레퍼런스 게임의 실제 수치를 찾아서 맞췄다.
+
+| 출처 | 수치 |
+|---|---|
+| 세키로 | 기본 체력 320, 체력력 1당 +80 (최대 1120). 스태미나 바 자체가 없고 체간(Posture)이 그 자리를 대신함 |
+| 다크소울3 | 스태미나 지구력 11에서 95, 40에서 소프트캡 160, 최대 170. 재생 45/초. 무기 약공격 17.5~19.5 소모 |
+
+세키로엔 스태미나가 없고 다크소울엔 체간이 없어서, **체력은 세키로의
+기본값(320), 스태미나는 다크소울3 초반 캐릭터 수준(120)**으로 잡았다.
+소모값은 다크소울3의 약공격 17.5~19.5를 반올림해서 공격 18,
+회피는 그보다 살짝 비싸게 22로 뒀다 (회피를 남발하지 못하게).
+
+| 변수 (CombatTuning) | 값 | 근거 |
+|---|---|---|
+| `MaxHealth` | 320 | 세키로 기본 체력 |
+| `MaxStamina` | 120 | 다크소울3 초반 지구력 구간 |
+| `StaminaRegenRate` | 45 | 다크소울3 표준 재생 45/초 |
+| `StaminaRegenDelay` | 0.6 | 소모 직후 재생이 바로 안 붙게 |
+| `AttackStaminaCost` | 18 | 다크소울3 직검 약공격 17.5 (검증됨) |
+| `DodgeStaminaCost` | 13 | 아래 "구르기 비용 조사" 참고 |
+
+#### 구르기 비용 조사 (2026-09-07) — 검증된 것과 아닌 것을 구분
+
+**검증된 수치**
+| 항목 | 값 | 출처 |
+|---|---|---|
+| 스태미나 재생 | 45/초 (장비하중 69.9% 초과 시 37/초) | DS3 위키 · 메커니즘 치트시트 |
+| 스태미나 총량 | 지구력 11에서 95, 40에서 소프트캡 160, 최대 170 | DS3 위키 |
+| 직검 1H R1 소모 | 브로드소드 17.5 / 다크소드 19.5 | 유저 실측 (총량 118에서 6타 후 1 남음 방식) |
+| "1포인트만 있어도 행동은 나감" | 사양 | 메커니즘 치트시트 |
+
+**검증 못 한 것 — 구르기 비용**
+데이터마이닝된 정확한 수치가 공개 자료에 없다. 확인 가능한 것은 두 가지뿐:
+- 커뮤니티 실측 추정 "**총 스태미나의 약 10%**"
+- 구르기가 **약공격보다 확실히 싸다** — 스팀 토론에서 "구르기 비용이
+  너무 낮다, R1 공격과 비슷해야 한다"는 불만이 반복적으로 제기됨
+
+즉 DS3에서 구르기는 공격보다 싸고, 그게 롤 스팸을 조장한다는 게
+**알려진 밸런스 결함**이다.
+
+**우리 선택: 13 (DS3 충실)**
+총량 120의 약 10% + "공격보다 싸다"는 두 조건을 모두 만족한다.
+포트폴리오에서는 "레퍼런스를 그대로 맞췄고, 그 레퍼런스의 알려진 결함도
+파악하고 있다"고 설명할 수 있는 쪽이 낫다고 판단했다.
+
+**대안 (롤 스팸을 막고 싶다면): 20**
+공격(18)보다 살짝 비싸게 만들어 "구르기는 공짜가 아니다"를 만드는 값.
+DS3와는 다른 선택이지만 세키로/블러드본 쪽 설계 철학에 가깝다.
+`DodgeStaminaCost` 하나만 바꾸면 되므로 언제든 전환 가능.
+
+### 구현
+
+- **재생**: Tick에서 `FInterpToConstant(현재, 최대, DeltaTime, 재생속도)`.
+  이름 그대로 초당 일정량이라 "45/초"가 그대로 들어간다.
+- **재생 지연**: 타이머 방식. 스태미나를 쓰면 `bStaminaRegenBlocked = true` +
+  `SetTimer("OnStaminaRegenResume", 0.6)`. 같은 함수명으로 타이머를 다시
+  걸면 기존 타이머가 갱신되므로, 연타하면 지연도 계속 밀린다.
+- **소모**: `SpendStamina(Cost)` 함수. 체력과 같은
+  `Clamp(Lerp(현재,0,SafeDivide(Cost,현재)),0,최대)` 우회를 쓴다.
+- **판정**: `HasStamina(Cost)` 함수 —
+  `InRange(Value=Cost, Min=0, Max=현재스태미나)`.
+  `>=` 노드를 만들 수 없어서 InRange로 대체했다 (Cost가 0~현재 사이면
+  충분하다는 뜻이라 의미가 같다).
+- **게이트**: `TryEnterDodge` / `TryEnterAttack`의 공중 판정 다음에
+  `HasStamina` 분기를 넣었다. 소모는 실제 발동 지점
+  (`SetActionState(Dodge)` 직후 / `StartComboStep` 진입)에서 한다 —
+  콤보 4타면 4번 소모된다.
+
+## HUD — WBP_PlayerHUD (2026-09-07)
+
+`/Game/BossArena/UI/WBP_PlayerHUD`. 좌하단에 체력(빨강) / 스태미나(초록)
+프로그레스 바 2개.
+
+- 앵커 좌하단(0,1), 정렬(0,1), 왼쪽 40px
+- 체력 바: 아래에서 74px, 300×26 / 스태미나 바: 40px, 300×18
+- `Event Tick` → `GetOwningPlayerPawn` → `Cast To BP_Player_Combat` →
+  `HealthBar.SetPercent(SafeDivide(CurrentHealth, MaxHealth))` →
+  `StaminaBar.SetPercent(SafeDivide(CurrentStamina, MaxStamina))`
+- `BP_Player_Combat`의 BeginPlay에서 `CreateWidget` → `AddToViewport`
+
+바인딩(Binding) 대신 Tick에서 갱신하는 이유: 바인딩은 매 프레임 도는 건
+같은데 그래프가 위젯 안에 숨어서 디버깅이 어렵다. Tick 한 줄이 더 읽기 쉽다.
+
+## 공격 이펙트 · 사거리 (2026-09-07)
+
+### 사거리 축소
+
+주먹인데 사거리가 길다는 피드백 → `AttackHitRange` 130 → **70**,
+`AttackHitRadius` 85 → **50**. 판정 구체가 캐릭터 중심에서 앞으로 70cm,
+반지름 50cm이므로 최대 도달거리 120cm. 사람 팔 뻗은 길이에 가깝다.
+`bShowHitDebug`로 구체가 보이니 더미 앞에 서서 눈으로 맞추면 된다.
+
+### 이펙트 — 프로젝트에 이미 있는 것을 씀
+
+`/Game/ParagonCrunch/FX/Particles/Abilities/` — Paragon의 **크런치**가
+복싱 캐릭터라 맨손 격투 이펙트가 통째로 들어있다. 새로 받을 필요가 없었다.
+
+| 에셋 | 용도 |
+|---|---|
+| `P_Crunch_Primary_Impact` | 기본 펀치 히트 (현재 연결됨) |
+| `P_Crunch_Cross_Enemy_Impact` | 2타(크로스)용 |
+| `P_Crunch_Hook_Enemy_Impact` | 3타(훅)용 |
+| `P_Crunch_Uppercut_Impact` / `GutPunch_Impact` | 4타용 |
+| `P_Crunch_Hook_3D_Trail` / `UpperCut_3D_Trail` | 주먹 궤적 트레일 |
+
+전부 Cascade(`ParticleSystem`)라 `SpawnEmitterAtLocation`으로 재생한다.
+
+연결 방식: `ApplyRadialDamage`의 반환값(뭔가 맞았는지)이 true일 때만
+`HitImpactFX`를 판정 구체 위치에 스폰한다. **허공을 치면 안 나온다.**
+`HitImpactFX`는 CombatTuning의 인스턴스 편집 가능 변수라 디테일 패널에서
+다른 이펙트로 바꿔 끼울 수 있다.
+
+무료 대안(더 필요할 때): Epic이 Fab에 올린 **Niagara Examples Pack**
+(50종 이상, UE5.7용, 무료) — 임팩트·스파크·트레일·히트 디졸브 포함.
+
+## 가드 중 이동 (2026-09-07)
+
+`Move` 함수가 `ActionState == Locomotion`일 때만 이동 입력을 받고 있어서
+가드 중엔 움직일 수 없었다. `Locomotion` 분기의 `else`에 `Guard` 판정
+분기를 하나 더 달아, 둘 중 하나면 같은 `AddMovementInput` 체인으로
+들어가게 했다 (`Or` 노드를 못 만들어서 분기 2단으로 처리).
+
+이동 속도는 `TryEnterBlock`에서 `MaxWalkSpeed = BlockWalkSpeed(220)`,
+`ExitBlock`에서 `BaseWalkSpeed(600)`로 복구한다.
+
+### 아직 남은 것 — 상체만 블록
+
+지금 `AS_Block`은 `DefaultSlot`에 전신으로 재생되므로, **가드하며 걸으면
+다리가 안 움직이고 미끄러진다.** 제대로 하려면 애님 그래프에
+`LayeredBoneBlend`를 넣어 `spine_01` 위쪽만 블록 포즈로 덮고 하체는
+로코모션을 유지해야 한다.
+
+```
+StateMachine → Slot 'DefaultSlot' ─┬─→ LayeredBoneBlend ─→ ControlRig → Root
+                                   │      Base ←┘
+                                   └─→ Slot 'UpperBody' ─→ Blend Pose 0
+                                          (BlendDepth: spine_01 = 0)
+```
+
+**주의**: 예전에 이 작업을 하다 공격이 통째로 죽은 적이 있다.
+원인은 `BlendDepth`를 `-1`로 준 것 — 음수는 해당 본 가지를 블렌드에서
+**빼버리기** 때문에 상체가 통째로 0 가중치가 됐다. 반드시 `0`을 써야 한다
+(0 = 해당 본과 그 자식 전부 100% 가중치).
+
+## 회피 성공 VFX — 설계 (2026-09-07)
+
+### 무엇을 "성공"으로 볼 것인가
+
+지금 회피는 무적 프레임(i-frame) 개념이 없다. 그래서 먼저 정의가 필요하다:
+
+```
+회피 시작 → PerfectDodgeWindow(예: 앞 0.2초) 동안 bInvincible = true
+          → 이 구간에 피격 판정이 들어오면 "퍼펙트 회피"
+```
+
+`Event AnyDamage`에서 `bInvincible`이면 데미지를 0으로 만들고
+`OnPerfectDodge` 이벤트를 쏘는 구조. **보스 공격이 있어야 검증된다.**
+
+### 잔상(고스트) 표현 방법 3가지
+
+| 방법 | 방식 | 장단점 |
+|---|---|---|
+| **A. PoseableMesh 스냅샷** | 회피 순간 `PoseableMeshComponent`를 3~4개 스폰해 현재 포즈를 복사(`CopyPoseFromSkeletalComponent`)하고, 반투명 머티리얼로 점점 사라지게 함 | 진짜 "잔상"처럼 보임. 블루프린트만으로 가능. 캐릭터 1명이면 성능 문제 없음 |
+| **B. 머티리얼 디졸브** | 캐릭터 머티리얼에 프레넬/디졸브 파라미터를 넣고 회피 중 값을 애니메이션 | 가장 가벼움. 하지만 "잔상"이 아니라 "번쩍임"에 가까움 |
+| **C. Niagara 메시 리본** | Niagara에서 스켈레탈 메시를 샘플링해 파티클로 뿌림 | 가장 화려하지만 Niagara 작업량이 큼 |
+
+**추천은 A.** 세키로/데빌메이크라이류의 잔상이 정확히 이 방식이고,
+블루프린트만으로 끝나며, 값(개수/간격/지속시간/색)을 전부 노출할 수 있어
+포트폴리오에서 설명하기도 좋다.
+
+구현 스케치:
+```
+OnPerfectDodge
+  → ForLoop(0 ~ GhostCount-1)
+      → SpawnPoseableMesh(현재 위치/회전)
+      → CopyPoseFromSkeletalComponent(플레이어 메시)
+      → SetMaterial(M_Ghost, 시작 알파 = GhostAlpha)
+      → SetTimer(소멸, GhostLife)
+      → Delay(GhostInterval)   ← 이 부분은 타이머 체인으로
+```
++ 화면 연출로 `P_Crunch_Heat_Distortion`(이미 프로젝트에 있음)을
+같이 터뜨리면 "슉" 하는 느낌이 산다.
+
+**순서상 보스 AI가 먼저다.** 맞을 일이 없으면 회피 성공을 판정할 수 없다.
+
+## 무적 프레임 · 퍼펙트 회피 · 잔상 VFX (구현 완료, 2026-09-07)
+
+### 무적 프레임 — DS3 미들롤 기준
+
+다크소울3 미들롤의 무적 프레임은 **13프레임 = 0.433초**이고 롤 시작
+즉시 발동한다(지연 없음). 장비 무게 시스템은 넣지 않기로 했으므로
+미들롤 하나로 고정했다.
+
+| 변수 (CombatTuning) | 값 |
+|---|---|
+| `IFrameDuration` | 0.433 |
+
+우리 구르기 전체 길이는 배속 적용 후 약 0.71초이므로 앞 61% 구간이
+무적이다. DS3도 롤 전체 대비 절반 남짓이라 체감이 비슷하다.
+
+흐름: `TryEnterDodge`의 `SpendStamina` 직후
+`bInvincible = true` → `SetTimer("OnIFrameEnd", IFrameDuration)` →
+`OnIFrameEnd`에서 `false`.
+
+### 퍼펙트 회피 = 무적 중 피격
+
+`Event AnyDamage` 맨 앞에 `Branch(bInvincible)`을 넣었다.
+
+- **true** → 데미지 처리를 통째로 건너뛰고 `OnPerfectDodge` 호출
+- **false** → 기존 데미지 계산
+
+별도의 "퍼펙트 판정 창"을 따로 두지 않은 이유: 무적 프레임 중에 실제로
+공격이 지나갔다는 것 자체가 "성공적으로 피했다"는 뜻이라, 판정을 하나 더
+만들면 값만 늘고 의미가 겹친다.
+
+### 디버그 — 상시 퍼펙트 회피
+
+지금은 플레이어를 때리는 것이 없어서 잔상을 볼 방법이 없다. 그래서
+`bDebugAlwaysPerfectDodge` (Debug 카테고리, Instance Editable, **기본 true**)를
+넣었다. 켜져 있으면 `TryEnterDodge`가 무적 타이머를 건 직후 무조건
+`OnPerfectDodge`를 호출해서, **구를 때마다 잔상이 나온다.**
+
+보스가 생겨서 실제 피격으로 검증되면 이 값을 false로 끄면 된다.
+끄더라도 `AnyDamage`의 무적 판정 경로는 그대로 살아 있다.
+
+### 잔상 VFX
+
+**`M_DodgeGhost`** (`/Game/BossArena/Materials/Base/`)
+- Unlit + Translucent + TwoSided
+- `GhostColor` (VectorParameter, 기본 청록) → EmissiveColor
+- `GhostOpacity` (ScalarParameter, 기본 0.6) → Opacity
+
+**`BP_DodgeGhost`** (`/Game/BossArena/Blueprints/`)
+- `InitGhost` 커스텀 이벤트:
+  1. `AddComponentByClass(PoseableMeshComponent)` → 캐스팅 → `GhostMesh`
+     (MCP로는 블루프린트에 컴포넌트를 미리 추가할 수 없어서 런타임 생성)
+  2. `GetPlayerCharacter(0) → GetMesh` 로 플레이어 메시를 찾고,
+     `SetSkinnedAssetAndUpdate` + `CopyPoseFromSkeletalComponent`로
+     **그 순간의 포즈를 그대로 복사**
+  3. `CreateDynamicMaterialInstance(0, GhostMaterial)`
+  4. `SetLifeSpan(GhostLife)`
+- `Tick`: `SetScalarParameterValueOnMaterials("GhostOpacity",
+  Lerp(0, GhostAlpha, SafeDivide(GetLifeSpan(), GhostLife)))`
+  → 남은 수명에 비례해 서서히 사라진다.
+  `GetLifeSpan()`이 **남은 시간**을 돌려주는 걸 이용한 것이라 별도
+  타이머 변수가 필요 없다.
+
+| 변수 (BP_DodgeGhost, Ghost) | 값 |
+|---|---|
+| `GhostLife` | 0.45초 |
+| `GhostAlpha` | 0.6 |
+| `GhostMaterial` | `M_DodgeGhost` |
+
+**스폰 (BP_Player_Combat)**
+`SpawnDodgeGhost()` 함수 — 플레이어 **메시의 월드 트랜스폼**에 스폰한다
+(액터 트랜스폼이 아니라 메시 기준이어야 -90 오프셋/회전이 맞는다).
+
+```
+OnPerfectDodge → SpawnDodgeGhost() → SetTimer("SpawnGhost2", 0.06)
+SpawnGhost2    → SpawnDodgeGhost() → SetTimer("SpawnGhost3", 0.06)
+SpawnGhost3    → SpawnDodgeGhost()
+```
+
+0.06초 간격으로 3개를 남겨서 회피 궤적을 따라 잔상이 늘어선다.
+루프 대신 이벤트 3개를 체인으로 건 이유는 MCP로 `Delay` 노드를 만들 수
+없기 때문이다 (타이머는 만들 수 있다).
+
+**남은 것**: `SKM_Quinn_Simple`의 머티리얼 슬롯이 2개 이상이면 0번만
+고스트 머티리얼로 바뀐다. PIE에서 보고 이상하면 슬롯을 추가로 덮으면 된다.
+
+## 가드 상체 블렌딩 (완료, 2026-09-07)
+
+애님 그래프에 **이미 레이어 구조가 있었다.**
+
+```
+StateMachine(MainStates) → Slot 'DefaultSlot' → SaveCachedPose 'BasePose'
+                                                       ├→ LayeredBoneBlend.BasePose
+                                                       └→ Slot 'AttackUpperBody' → BlendPoses_0
+                                                                LayeredBoneBlend → ControlRig → Root
+```
+
+본 필터도 `spine_01 / BlendDepth 1`로 정상이었다 (예전 사고의 원인이던
+`-1`이 아님). `AttackUpperBody` 슬롯에 아무것도 재생되지 않아서 그동안
+아무 일도 안 하고 있었던 것.
+
+**그래서 고친 건 핀 값 하나다** — `TryEnterBlock`의
+`PlaySlotAnimationAsDynamicMontage` 슬롯 이름을
+`DefaultSlot` → `AttackUpperBody`.
+
+이제 가드 중에도 하체는 로코모션이 돌아 걸어다닐 수 있다. 공격·회피는
+그대로 `DefaultSlot`(전신)이라 영향 없다.
+
+(슬롯 이름이 `AttackUpperBody`인데 실제로는 블록이 쓴다 — 이름을 바꾸면
+애님 그래프 노드와 몽타주를 같이 고쳐야 해서 그대로 뒀다.)
 
 ## 공격(Attack) 1타 + 취소 구간/입력 버퍼 계획 (2026-09-03)
 
@@ -1207,3 +1838,198 @@ State가 열리는 시점(`Play Montage`의 `On Notify Begin` 델리게이트로
 - **작업한 내용은 매번 사용자에게 보고한다.** 어떤 노드/변수를 왜
   추가·삭제·변경했는지 쉬운 한국어로 그때그때 알린다 — 나중에 요약만
   던지면 구조를 따라올 수 없고, 면접에서 설명할 수 없게 된다.
+
+---
+
+## 공격 콤보 재설계 — 4타 + 세키로식 입력 버퍼 (2026-09-06)
+
+### 최종 스코프
+**공격은 4타까지만 구현한다.** 그 이상은 만들지 않는다. 5타 이상이
+필요해지면 그때 다시 논의한다.
+
+### 폐기한 것
+- **"좌클릭 1번에 1타+2타 연속(잽잽)"** 방향 폐기. 몽타주 두 개를 하나로
+  합치거나 타이머로 자동 연결하는 방식은 전부 버린다. **한 번 클릭 =
+  한 타**가 기본이다.
+- **취소 구간 노티파이(`ANS_AttackCancelWindow`) 기반 판정 폐기.**
+  `WasAnimNotifyStateActiveInAnyState`는 이름 그대로 **스테이트 머신의
+  State에서 발생한 노티파이**를 조회하는 함수라, 몽타주 슬롯에 찍은
+  노티파이는 잡히지 않는다. 그래서 `bCanCancelCurrentAction`이 한 번도
+  true가 되지 않았고 2타가 영영 안 나갔다. 컴파일 에러도 런타임 에러도
+  안 뜨기 때문에 겉보기엔 멀쩡해 보인다 — **이 함수를 몽타주 노티파이
+  판정에 쓰지 말 것.**
+  (그 전까지 "콤보가 된다"고 확인했던 건 취소 구간이 아니라
+  `bAttackQueued`+타이머로 돌던 예약 방식이었다. 취소 구간 경로는 사실상
+  한 번도 검증된 적이 없었다.)
+
+### 현재 구조
+데이터 주도 방식이라 **몽타주만 배열에 끼우면 4타까지 그대로 작동한다.**
+
+**변수**
+| 변수 | 타입 | 역할 |
+|---|---|---|
+| `AttackMontages` | AnimMontage 배열 (인스턴스 편집 가능) | 콤보 순서대로 넣는다. 넣은 개수만큼 콤보가 늘어남 (최대 4개) |
+| `PendingCombo` | AnimMontage 배열 (내부) | 콤보 시작 시 `AttackMontages`를 복사해 쓰는 작업 큐. 한 타 나갈 때마다 앞에서 하나씩 제거 |
+| `bComboWindowOpen` | bool | 다음 타로 넘어갈 수 있는 구간인지 |
+| `bAttackBuffered` | bool | 세키로식 선입력 버퍼 |
+| `ComboWindowRatio` | float (기본 0.55) | 현재 타의 몇 % 지점부터 다음 타를 받을지 |
+| `AttackPlayRate` | float (기본 1.4) | 공격 몽타주 재생 배속 |
+
+**흐름**
+```
+TryEnterAttack (좌클릭 1회 = 1회 호출)
+├─ ActionState == Locomotion ?
+│   YES → PendingCombo = AttackMontages   (큐 채우기)
+│         ActionState = Attack
+│         StartComboStep()
+└─ NO → ActionState == Attack ?
+        YES → bComboWindowOpen ?
+              YES → StartComboStep()          (즉시 다음 타)
+              NO  → bAttackBuffered = true    (선입력 저장 = 세키로 버퍼)
+        NO  → 무시 (회피 중 등)
+
+StartComboStep()  [공용 함수]
+   bAttackBuffered = false
+   bComboWindowOpen = false
+   PlayAnimMontage( PendingCombo[0], AttackPlayRate )
+   PendingCombo에서 0번 제거
+   SetTimer(OnComboWindowOpen,     실재생시간 × ComboWindowRatio)
+   SetTimer(OnAttackRecoveryTimer, 실재생시간)
+      * 실재생시간 = 몽타주 길이 ÷ AttackPlayRate
+
+OnComboWindowOpen
+   PendingCombo에 아직 남은 타가 있으면
+      bComboWindowOpen = true
+      bAttackBuffered 였다면 → StartComboStep()   (버퍼 소진)
+
+OnAttackRecoveryTimer
+   ActionState = Locomotion
+   bAttackBuffered = false
+   bComboWindowOpen = false
+```
+
+**세키로식 조작감의 핵심**: 다음 타가 아직 안 열린 시점에 눌러도 입력이
+씹히지 않고 `bAttackBuffered`에 저장됐다가, 창이 열리는 순간 자동으로
+발동한다. 플레이어는 리듬만 맞추면 되고 프레임을 맞출 필요가 없다.
+콤보 길이는 `PendingCombo`가 비면 자연히 끝나므로 별도 카운터가 없다.
+
+### 알아둘 것 (MCP 제약)
+- **승격 연산자(promotable operator) 노드는 `create_node`로 만들 수 없다.**
+  `+`, `-`, `==`(int), `<`, `float*float`, `float/float` 전부 해당.
+  `find_node_types`에도 안 잡힌다. 우회 수단:
+  | 필요한 연산 | 대신 쓸 노드 |
+  |---|---|
+  | `A / B` | `수학\|플로트\|SafeDivide` |
+  | `A * ratio` | `수학\|플로트\|Lerp(0, A, ratio)` |
+  | 인덱스 유효성 | `유틸리티\|배열\|IsValidIndex` |
+  | 카운터 증가 | 배열에서 `RemoveIndex(0)`으로 소진시키는 방식으로 대체 |
+- **불리언 변수의 `b` 접두사는 노드 type_id에서 빠진다.**
+  `bComboReady` → `Variables|CombatState|GetComboReady`.
+- **순수(pure) 노드 재평가 함정**: 배열 `Get`은 순수 노드라 소비 시점에
+  평가된다. `Get[0]` 결과를 쓰는 노드보다 `RemoveIndex(0)`를 먼저 실행하면
+  엉뚱한 원소를 읽는다. **재생 → 제거** 순서를 지킬 것.
+
+
+## 플레이어 최종 점검 (2026-09-07) — 보스 작업 전 마감
+
+보스 AI로 넘어가기 전에 플레이어 쪽을 전수 점검했다. 그래프별로 고아 노드
+(연결이 하나도 없거나 실행 핀이 끊긴 노드)를 전부 스캔했다.
+
+### 발견하고 고친 것
+
+**① `SpendStamina`가 통째로 끊겨 있었다 (심각)**
+`FunctionEntry`부터 `SetCurrentStamina`까지 연결이 전부 사라져 있었다.
+결과적으로 **스태미나가 한 번도 줄어들지 않았고**, `HasStamina` 게이트도
+항상 통과했다. 재연결로 수정.
+
+원인은 MCP 특유의 함정이다 — **노드에 파라미터를 추가하거나 클래스를
+지정하면 언리얼이 그 노드를 재생성하면서 기존 연결을 버린다.** 같은 이유로
+`BP_DodgeGhost`의 `AddComponentByClass`도 캐스트 연결이 끊겼었다.
+**앞으로 MCP로 노드를 만든 뒤에는 반드시 `get_node_infos`로 연결을
+다시 확인해야 한다.** 컴파일은 통과하기 때문에 눈치채기 어렵다.
+
+**② 고아 노드 11개 제거**
+- `TryEnterDodge` 7개 — 예전 세션의 SelectObject/EnumLiteral 잔재 +
+  무적 프레임 배선 1차 시도가 남긴 중복 세트
+- `EventGraph` 3개, `SpawnDodgeGhost` 1개
+
+**③ 죽은 변수 `StaminaRegenTimer` 제거**
+타이머 방식으로 바꾸면서 안 쓰게 된 변수. `LastMoveInput`은 카테고리가
+비어 있어서 `Combat State`로 옮김.
+
+**④ 플레이어 사망 처리 추가**
+체력이 0이 돼도 아무 일이 없었다.
+`AnyDamage` → 체력 반영 → `NearlyEqual(체력, 0)` → `ActionState = Dead`
+→ "YOU DIED" 출력 → `DisableInput`.
+사망 애니메이션은 에셋이 없어 넣지 않았다. 상태와 입력 차단만 되어 있으므로
+몽타주만 끼우면 된다.
+
+### 검증 결과 — `TryEnterDodge` 최종 실행 순서
+
+```
+FunctionEntry
+ → Branch(ActionState == Dodge)      차단: 구르는 중 재입력
+ → Branch(IsFalling)                 차단: 공중
+ → Branch(bDodgeOnCooldown)          차단: 쿨타임
+ → HasStamina(DodgeStaminaCost)
+ → Branch(스태미나 충분?)             차단: 부족
+ → SetActionState(Dodge)
+ → SpendStamina(13)
+ → bInvincible = true → SetTimer(OnIFrameEnd, 0.433)
+ → Branch(bDebugAlwaysPerfectDodge)  → OnPerfectDodge (디버그용)
+ → 이동 시작지점/방향 세팅 → 몽타주 재생 → 복귀 타이머
+```
+
+11개 그래프 전부 고아 노드 0개로 정리 완료.
+
+## HUD 폴리싱 (2026-09-07)
+
+### 사용 에셋 — Kenney Fantasy UI Borders (CC0)
+
+`/Game/BossArena/UI/Textures/`
+| 애셋 | 원본 | 용도 |
+|---|---|---|
+| `T_UI_Panel` | `Panel/panel-001.png` | 바 뒤 어두운 패널 |
+| `T_UI_Frame` | `Transparent center/panel-transparent-center-001.png` | 장식 테두리 (가운데 투명) |
+
+둘 다 48×48이라 **9-slice 마진 1/3 (16px)** 로 잡았다. 텍스처 설정은
+`LODGroup=UI`, `CompressionSettings=EditorIcon`(UI용 무압축), `SRGB` 켬.
+
+**중요 — 왜 바마다 프레임을 두르지 않았나**: 9-slice 마진이 16px이면 위젯의
+최소 높이가 32px이다. 스태미나 바는 12px이라 프레임을 개별로 두르면
+모서리가 뭉개진다. 그래서 **바 두 개를 감싸는 패널 하나(404×92)** 에만
+프레임을 씌웠다. 결과적으로 소울류 HUD 배치에도 더 가깝다.
+
+### 레이어 구성 (zOrder 순)
+
+```
+0  PanelBG        404×92  T_UI_Panel, 거의 검정 82%
+1  HealthDelayBar 360×20  옅은 베이지 — 지연 데미지 바
+2  HealthBar      360×20  진홍, 배경 투명(아래 지연 바가 비치도록)
+2  StaminaBar     300×12  올리브
+3  PanelFrame     404×92  T_UI_Frame, 황동색 틴트
+```
+
+### 지연 데미지 바
+
+맞으면 빨간 바는 즉시 줄고, 그 아래 베이지 바가 뒤따라 내려온다.
+
+```
+Tick: DelayPercent = FInterpToConstant(DelayPercent, 체력비율, DeltaTime, DelaySpeed)
+      HealthDelayBar.SetPercent(DelayPercent)
+```
+`DelaySpeed` 0.45 (초당 45%씩 따라감, Instance Editable).
+`HealthBar`의 배경을 알파 0으로 만들어야 아래 바가 보인다.
+
+### 게이지가 안 움직였던 원인
+
+`CreateWidget`의 `OwningPlayer`가 비어 있었다. 그러면 위젯의
+`GetOwningPlayerPawn`이 null을 반환하고 **캐스트가 조용히 실패**한다
+(실패해도 로그가 안 남는다). 두 군데를 고쳤다:
+- `CreateWidget`에 `GetPlayerController(0)` 연결
+- 위젯도 `GetOwningPlayerPawn` → `GetPlayerCharacter(0)`으로 교체
+
+### 아직 안 한 폴리싱 (에셋 불필요, 요청 시 가능)
+- 스태미나 소진 시 붉게 깜빡임
+- 스태미나 가득 차면 페이드아웃 (다크소울 방식)
+- 숫자 표시 / 아이콘
