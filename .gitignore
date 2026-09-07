@@ -19,3 +19,6 @@ Saved/
 # OS
 .DS_Store
 Thumbs.db
+
+# Paragon Crunch (2GB) - Fab에서 재다운로드. LFS 무료한도 초과 방지
+/Content/ParagonCrunch/
