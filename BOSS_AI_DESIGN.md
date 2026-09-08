@@ -517,3 +517,145 @@ argmax를 쓰면 같은 상황에서 항상 같은 기술이 나와서
    ③ 각 입력의 곡선
 3. **8 GOAP** — 목표 목록, 액션의 전제조건 / 효과 / 비용
    (§7의 "플랜을 하드코딩하지 말 것"을 지킬 것)
+
+---
+
+## 15. HFSM 골격 + 공격 에셋 연결 — 구현 스펙 (2026-09-08)
+
+> 이동(Approach/Circle/Retreat)과 거리 구간 설계는 **이 단계에서 하지
+> 않는다.** 지금 필요한 건 "보스가 상태를 갖고, 공격이 데이터로
+> 존재하는 것"이지 이동이 아니다. 이동은 Utility에 선택지가 필요해질
+> 때 붙인다.
+
+### 15.1 상태 정의
+
+```
+Root
+├─ Idle                    전투 시작 전
+├─ Combat                  (부모 상태)
+│   ├─ Ready               다음 공격까지 대기
+│   └─ Attack              (부모 상태)
+│        ├─ Windup         예비동작
+│        ├─ Active         히트 판정 열림
+│        └─ Recovery       후딜 = 플레이어의 딜타임
+└─ Dead
+```
+
+**Stagger(경직)는 넣지 않는다.** 소울라이크 보스에게 경직이 상시
+걸리면 보스전 자체가 무의미해진다 (사용자 결정, 2026-09-07).
+넣게 되더라도 `Combat`의 자식으로 들어가므로 구조 변경은 없다.
+
+### 15.2 왜 HFSM인가 — 이 구조가 증명하는 것
+
+플랫 FSM이면 상태가 늘어날 때마다 전이가 제곱으로 는다.
+계층으로 묶으면 **부모에 한 번 쓴 전이가 자식 전부에 적용된다.**
+
+| 규칙 | 어디에 쓰는가 | 플랫 FSM이면 |
+|---|---|---|
+| `HP ≤ 0 → Dead` | **Root에 1개** | 상태 5개마다 각각 = 5개 |
+| "플레이어를 바라본다" | **Combat에 1개** | Ready·Windup 각각 |
+| "커밋 이후 회전 금지" | `Windup → Active` 경계 | 예외 처리로 흩어짐 |
+
+그리고 **나중에 Approach / Circle / Retreat를 붙일 때
+`Combat`의 형제로 추가하기만 하면 된다.** 사망 전이도, 추적 회전도
+다시 쓸 필요가 없다. 이게 "FSM의 한계를 극복한다"의 실물이다.
+
+### 15.3 기존 불리언 → 상태로 교체
+
+지금 보스는 불리언 4개로 암묵적 상태를 흉내내고 있다. 전부 상태
+질의로 대체한다.
+
+| 기존 | 대체 |
+|---|---|
+| `bIsAttacking` | `State ∈ {Windup, Active, Recovery}` |
+| `bCanTurn` | `State ∈ {Ready, Windup}` |
+| `bHitWindowOpen` | `State == Active` |
+| `bLungeActive` | `State == Windup` |
+| `bHasHitThisAttack` | **유지** (상태가 아니라 공격 1회당 플래그) |
+
+**커밋 시점 = Windup 종료 = Active 시작이 같은 순간이다.**
+지금 `OnAttackCommit`과 `OnAttackHit` 타이머가 둘 다 `WindupTime`에
+걸려 있는데, 상태로 옮기면 이 둘이 자연히 하나가 된다.
+
+구현:
+- `E_BossState` 열거형 — `Idle / Ready / Windup / Active / Recovery / Dead`
+- `BossState` 변수 + **`SetBossState(New)` 함수 하나로만 전이**
+  (홀로그램 패널이 읽고, 전이 로그를 남길 단일 지점이 된다)
+
+### 15.4 공격 테이블 — 에셋 연결
+
+공격을 코드가 아니라 **데이터**로 만든다. Utility AI는 나중에 이 표의
+행 중에서 고르기만 하면 된다. 구조를 다시 짤 일이 없다.
+
+**`S_BossAttack` 구조체**
+
+| 필드 | 타입 | 의미 |
+|---|---|---|
+| `Id` | Name | 행 식별자 |
+| `Montage` | AnimMontage | **우리 폴더 사본** (ParagonCrunch는 git 제외) |
+| `Role` | E_BossAttackRole | 아래 |
+| `PlayRate` | float | 0.75 고정 |
+| `WindupTime` | float | 임팩트까지 (배속 반영) |
+| `ActiveTime` | float | 0.15 기본 |
+| `TotalTime` | float | 몽타주 길이 ÷ PlayRate |
+| `Socket` | Name | `hand_l` / `hand_r` |
+| `Damage` | float | |
+| `LungeDistance` | float | 0 기본 |
+
+`E_BossAttackRole` — `ComboStart / ComboMid / ComboFinish / ComboTail /
+GuardBreak / OffBeat / Approach / Heavy`
+
+**`DT_BossAttacks` 행 (프레임은 30fps 기준, 배속 0.75 반영 후)**
+
+| Id | Role | 임팩트 | Windup | Total | **Recovery** | Socket |
+|---|---|---|---|---|---|---|
+| `Combo_01` | ComboStart | 6.8f | 0.302 | 1.244 | **0.79** | `hand_l` |
+| `Combo_02` | ComboMid | 6f | 0.267 | 1.244 | **0.83** | `hand_r` |
+| `Combo_03` | ComboFinish | 16f | 0.711 | 1.244 | **0.38** | `hand_l` |
+| `Combo_01_Fast` | ComboMid | 4f | 0.178 | 0.800 | **0.47** | `hand_l` |
+| `Combo_01_Slow` | ComboTail | 6.8f | 0.302 | TBD | TBD | `hand_l` |
+| `GutPunch` | GuardBreak | 17f | 0.756 | 1.600 | **0.69** | TBD |
+| `Hook_Empowered` | OffBeat | 15f | 0.667 | 2.667 | **1.85** | TBD |
+| `DashingCross` | Approach | 21f | 0.933 | 1.511 | **0.43** | TBD |
+| `Uppercut` | Heavy | 17f | 0.756 | 2.667 | **1.76** | TBD |
+
+`Recovery = Total − Windup − Active(0.15)`.
+
+**Recovery는 그냥 남는 시간이 아니라 플레이어의 딜타임이다.**
+그래서 표에 파생값으로 박아둔다. 나중에 Utility의 입력이 되고,
+*"AI가 똑똑하다는 이유로 플레이어의 딜타임을 빼앗지 않는다"* 는
+계약을 숫자로 확인할 수 있는 자리이기도 하다.
+
+이 표가 §12 역할 배정을 검증해준다 — `Uppercut`(1.76)과
+`Hook_Empowered`(1.85)의 후딜이 압도적으로 길다. "헛치면 큰 빈틈"이
+설계 의도가 아니라 **에셋에 실제로 들어있는 성질**이었다.
+반대로 `Combo_03`(0.38)은 마무리치고는 짧다 — 콤보 끝에
+`Combo_01_Slow`를 붙여 딜타임을 만들자는 §12 판단의 근거가 된다.
+
+**TBD 처리**: Socket 4개와 `Combo_01_Slow` 길이는 미확인이다.
+`PLAN.md`의 애니메이션 테스트 리그(스크럽 + 촬영)로 확인할 수 있다.
+
+### 15.5 이 단계의 공격 선택 — Utility 전 임시
+
+Utility가 없으므로 **고정 콤보 체인**으로 둔다.
+
+```
+Combo_01 → Combo_02 → Combo_03 → (간격) → 반복
+```
+
+무작위가 아니라 고정 체인인 이유: §12에서 확정한 좌·우·좌 복싱
+콤비네이션이 실제로 성립하는지 먼저 확인해야 하고, Utility가
+들어올 때 **"고르는 주체"만 교체하면 되게** 하기 위해서다.
+
+교체 지점은 함수 하나 — `SelectNextAttack() → S_BossAttack`.
+지금은 체인 인덱스를 돌리고, Utility가 오면 점수 계산으로 바뀐다.
+
+### 15.6 완료 기준
+
+- [ ] `E_BossState` / `E_BossAttackRole` / `S_BossAttack` / `DT_BossAttacks`
+- [ ] `SetBossState` 단일 전이 함수, 불리언 4개 제거
+- [ ] 공격 파라미터가 전부 테이블에서 읽힘 (하드코딩 0개)
+- [ ] `SelectNextAttack()` 분리 — Utility 교체 지점
+- [ ] 3타 콤보가 좌·우·좌로 재생되고, 각 타의 히트박스 소켓이 맞음
+- [ ] `HP ≤ 0 → Dead` 가 Root 전이로 한 번만 정의됨
+- [ ] 사망 시 공격 타이머 전부 정지
