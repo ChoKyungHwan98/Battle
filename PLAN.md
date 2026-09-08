@@ -118,75 +118,156 @@
   `Set...`만 계속 나오면, 힌트 핀의 방향을 `EGPD_Input`으로 바꿔서
   다시 검색해볼 것.
 
-## 진행 상황 (2026-09-07 기준)
+## 진행 상황 (2026-09-08 기준)
 
-전투 코어(락온 / 회피 / 4타 콤보 + 입력 버퍼)까지 구현 완료. 남은 건
-가드·히트박스·연출.
+**플레이어 전투는 완성됐다. 지금은 보스 AI 구간이다.**
+
+### 작업 분담 (2026-09-08 확정)
+
+| 역할 | 담당 |
+|---|---|
+| 철학 · 제공하고 싶은 경험 | **사용자** |
+| HFSM / Utility / GOAP **설계** | **사용자 + Claude** (같이) |
+| **구현** | **Codex** |
+| 설계 문서 유지 | Claude |
+
+설계를 사용자가 이해하고 설명할 수 있어야 한다는 것이 이 분담의 이유다.
+포트폴리오 영상·면접에서 구조를 직접 말해야 하기 때문이다.
+따라서 **이 문서와 `BOSS_AI_DESIGN.md`는 Codex가 그대로 읽고 구현할 수
+있을 만큼 구체적이어야 한다.** 애매하면 구현이 아니라 설계로 되돌린다.
+
+---
+
+### 플레이어 — 완료 (추가 작업 없음)
 
 ```
-[기반]
-✔ BP_Player_Combat / BP_PlayerController_Combat / BP_BossArenaGameMode
-✔ Lvl_Arena_01 시작 맵 지정, PIE 스폰 확인
-✔ IA_Move / IA_Look / IA_Sprint / IA_Dodge / IA_LockOn / IA_Attack + IMC
-✔ E_PlayerMovementMode / E_ActionState
-
-[이동 · 락온]
-✔ ToggleLockOn — Free⇄LockOn 전환, BP_TrainingDummy를 타겟으로 저장
-✔ UpdateLockOnRotation — 몸통 RInterpTo, bOrientRotationToMovement 자동 전환
-✔ 락온 카메라 동조 — ControlRotation Yaw 추종, Pitch는 마우스 유지
-✔ Sprint — Shift Hold(0.25초)/Tap(0.2초) 트리거 분리, 600↔900
-✔ BS_Player_LockOn8Dir (에디터 UI 제작) + ABP_Player_Combat 2단 블렌드
-
-[회피]
-✔ Dodge (락온용) — A_INP_Dodge_01_* 10종, InPlace + 코드 이동
-✔ Roll (Free용) — A_Roll_Idle* 8방향, RootMotion (2026-09-07 전환)
-✔ 2단계 배속 — DodgeBurstRate(초반 3배) → DodgePlayRate
-✔ 방향 판정 트리 — CalculateDirection 각도 → 8방향 Select 체인
-✔ 회피 쿨타임 — DodgeCooldown, 복귀 시점부터 카운트 (2026-09-07)
-
-[공격]
-✔ 4타 콤보 — AttackMontages 배열 소비 방식, 좌클릭 1회 = 1타
-✔ 세키로식 입력 버퍼 — bAttackBuffered / bComboWindowOpen,
-  콤보 창(ComboWindowRatio 0.55) 이전 입력도 버퍼링 후 자동 발동
-✔ OnComboWindowOpen / OnAttackRecoveryTimer 타이머 체계
-
-[상태 제약]
-✔ 공중(점프 중) 회피·공격 차단 — IsFalling 게이트 (2026-09-07)
-
-[전투 판정]
-✔ 히트박스 · 데미지 — ApplyRadialDamage 구체 판정, 몽타주 진행률 기준
-✔ BP_TrainingDummy 체력 / 피격 / 자동 리셋
-✔ 플레이어 체력 + 피격 처리
-
-[가드]
-✔ 가드(Block) — AS_Block, 홀드 방식, 데미지 감쇄
-✖ IMC_Player_Combat에 IA_Block 키 바인딩 필요 (에디터에서 직접)
-
-[체력 · 스태미나 · UI]
-✔ 플레이어 체력 320 / 스태미나 120 (DS3·세키로 수치 기반)
-✔ 스태미나 소모(회피 13 / 공격 18) · 지연 후 선형 재생(45/초)
-✔ WBP_PlayerHUD — 좌하단 체력/스태미나 바 + 9-slice 프레임 + 지연 데미지 바
-✔ 공격 히트 이펙트 (ParagonCrunch 임팩트)
-✔ 플레이어 사망 처리 (체력 0 → Dead → 입력 차단)
-
-✔ 무적 프레임 0.433초 (DS3 미들롤 13프레임)
-✔ 퍼펙트 회피 판정 + 잔상(고스트) VFX 3연속
-✔ 가드 중 하체 로코모션 (상체만 블렌딩)
-
-[남은 것]
-← 보스 AI (HFSM + Utility AI + GOAP) + 홀로그램 디버그 패널  ★ 포트폴리오 메인
-← 패링(가드 초반 프레임 = 퍼펙트 가드)
-← 히트스톱 · 피격 리액션 애니메이션
-← 방향 스냅샷 기반 더킹
-← 잔상(고스트) VFX, 카메라 연출
-← 보스 AI (공격이 있어야 가드/체력이 실제로 검증됨)
+[기반]        BP_Player_Combat / Controller / GameMode / Lvl_Arena_01
+              IA_* 입력 + IMC, E_PlayerMovementMode / E_ActionState
+[이동·락온]    Free⇄LockOn, 몸통·카메라 RInterpTo 추종, Sprint 600↔900
+              BS_Player_LockOn8Dir + ABP_Player_Combat 2단 블렌드
+[회피]        Dodge 8방향(RootMotion), 2단계 배속, 쿨타임 0.25
+              무적 0.433초(DS3 미들롤 13프레임), 퍼펙트 회피 + 잔상 3연속
+[공격]        4타 콤보 + 세키로식 입력 버퍼(ComboWindowRatio 0.55)
+[가드]        AS_Block 홀드, 상체만 블렌딩(하체 로코모션 유지), 데미지 감쇄
+[수치]        체력 320 / 스태미나 120, 회피 13 / 공격 9, 지연 후 45/초 재생
+[UI]          WBP_PlayerHUD 좌하단, 9-slice 프레임, 지연 데미지 바
+[상태]        공중 회피·공격 차단, 사망 처리(입력 차단)
 ```
 
-4타 전부 스켈레톤 리타게팅 완료 확인 (2026-09-07). 다만 `AM_Attack1_2`/
-`AM_Attack1_3` 몽타주는 BossArena의 `AS_Attack1_2`/`_3`이 아니라 UAF 원본
-(`AS_Cross-R` / `AS_Hook-L`)을 참조한다. 원본도 우리 스켈레톤으로
-리타게팅돼 있어 재생에는 문제 없지만, BossArena 쪽 사본 2개는 아무도
-참조하지 않는 상태다 — 정리 대상.
+**철회된 항목**: `방향 스냅샷 기반 더킹` — 사용자가 말한 "더킹"이
+회피였음이 확인되어 설계에서 제거됨 (2026-09-07).
+
+**보류 항목** (에셋 필요, 사용자 판단 대기):
+- 피격 리액션 · 사망 애니메이션
+- 히트스톱
+- 패링(가드 초반 프레임 = 퍼펙트 가드) — 사용자가 "구현 다 하고 필요하면"으로 보류
+
+---
+
+### 보스 — 현재 상태
+
+```
+✔ BP_Boss_Crunch (Character 상속) + ABP_Boss_Crunch (Crunch_AnimBlueprint 복제)
+✔ 배치: Lvl_Arena_01 (0, -1200, 212), 스케일 2.0, 실신장 520cm
+✔ 콜리전: 캡슐·메시 모두 Camera 채널 Ignore (스프링암 관통 방지)
+✔ 공격 1종 — AM_Boss_Combo_01 (우리 폴더로 복제, 슬롯 UpperBody)
+✔ AttackCommitment — OnAttackCommit에서 bCanTurn=false (커밋 후 회전 금지)
+✔ 소켓 추적 스윕 히트박스 — 직전 프레임 주먹 → 현재 주먹 SphereTrace,
+  액티브 윈도우 동안 매 프레임, bHasHitThisAttack으로 1회 히트 보장
+✔ 추적 회전 Yaw 전용 (2026-09-08 pitch 버그 수정)
+✔ 디버그 표시 — 청록 캡슐 / 자홍 루트 / 노란 발바닥 / 주황 판정구
+✔ 플레이테스트 확인: 회피하면 헛치고, 후딜에 반격이 들어간다 ★ 코어 루프 성립
+
+✖ 이동 자체가 없다 (제자리 고정)
+✖ 사망 처리 없음
+✖ 경직 없음 (설계상 의도 — 소울라이크 보스에 상시 경직은 보스전을 무의미하게 함)
+✖ 페이즈 전환 없음
+✖ Utility / GOAP / 홀로그램 패널 전부 미착수
+```
+
+#### 보스 튜닝값 (현재)
+
+| 변수 | 값 | 근거 |
+|---|---|---|
+| `AttackPlayRate` | 0.75 | 원본은 소울라이크에 너무 빠름 (사용자 확인) |
+| `WindupTime` | 0.30 | 커밋 시점 = 회전 잠금 |
+| `ActiveTime` | 0.15 | 히트 윈도우 |
+| `AttackTotalTime` | 1.244 | 0.9333 ÷ 0.75 |
+| `AttackInterval` | 2.2 | 임시 (Utility가 대체할 값) |
+| `AttackHitRadius` | 85 | 주먹 반경 (월드 단위) |
+| `AttackSocket` | `hand_l` | 공격마다 교체 |
+| `AttackDamage` | 60 | |
+| `MaxHealth` | 1200 | |
+| `AttackLungeDistance` | **0** | Combo_01은 제자리 동작. DashingCross용으로 메커니즘만 유지 |
+
+---
+
+### 정리 대상 (잘못된 가설의 잔재 — Codex 착수 전 처리)
+
+부양 현상의 원인을 세 번 잘못 짚는 과정에서 남은 변경들이다.
+실제 원인은 **추적 회전이 pitch까지 액터에 적용한 것**이었다.
+
+1. `Ability_Combo_01~04`의 `bEnableRootMotion` → **false로 원복**
+   (해당 애니메이션에 루트 모션이 없어 무의미한 변경. ParagonCrunch
+   폴더라 git에도 안 올라간다)
+2. `CharMoveComp.bRunPhysicsWithNoController` → **false로 원복**
+   (`AddMovementInput`을 쓰려다 넣은 것. 지금은 안 씀. 단 보스 이동을
+   붙일 때 다시 필요해질 수 있으니 그때 판단)
+3. **"발이 바닥에 20 잠겨 있다"는 측정은 무효** — 몸이 42도 기울어진
+   상태에서 잰 값이다. Pitch 수정 후 재측정할 것. 메시 오프셋
+   `-110`을 건드리는 것은 재측정 결과를 보고 결정한다
+4. `AutoPossessAI = PlacedInWorldOrSpawned` → **유지**
+   (보스 이동/퍼셉션에 필요)
+5. **미참조 에셋 정리** — `AM_Attack1_2` / `AM_Attack1_3` 몽타주가
+   BossArena의 `AS_Attack1_2` / `AS_Attack1_3`이 아니라 UAF 원본
+   (`AS_Cross-R` / `AS_Hook-L`)을 참조한다. 재생에는 문제 없지만
+   BossArena 쪽 사본 2개는 아무도 참조하지 않는다
+
+---
+
+### 다음 순서
+
+`BOSS_AI_DESIGN.md` §13이 기준이다. 현재 진행도:
+
+```
+1. BP_Boss_Crunch + 보스 AnimBP                     ✔
+2. HFSM 골격 — Idle / Combat / Stagger / Dead        △ Attack만 존재
+3. 공격 1종 + AttackCommitment                       ✔ 회피가 통하는 것 확인
+   (AimPrediction은 §3에서 폐기)
+2.5 보스 이동 — Approach / Circle / Retreat          ✖ ← 여기부터
+4. 홀로그램 패널 v1 (HFSM 상태만)                     ✖
+5. PlayerModel + 관찰 기록                           ✖
+6. Utility AI — §12 역할 매트릭스대로 7종             ✖
+7. 패널 v2 (Utility 점수 막대)                       ✖
+8. GOAP — 액션/목표 정의 + 플래너                     ✖
+9. 패널 v3 (플랜 큐)                                 ✖
+10. 페이즈 2 + 이펙트/사운드                          ✖
+```
+
+**2.5(보스 이동)를 §13에 새로 넣었다.** 이유:
+
+Utility AI의 핵심 시연은 *"공격 점수가 전부 낮으면 선회한다"* 이다.
+보스가 제자리에 고정돼 있으면 선택지가 "공격한다 / 안 한다" 둘뿐이고,
+그러면 **Utility를 넣을 이유 자체가 없다.** 거리라는 축이 생겨야
+Considerations가 의미를 갖는다.
+
+**4(패널)를 일찍 만드는 이유**: AI는 눈에 안 보이면 디버깅이 불가능하다.
+Utility 점수는 화면에 떠 있어야 튜닝이 된다. 패널은 최종 산출물이자
+개발 도구다.
+
+#### 설계 결정이 필요한 지점 (사용자 + Claude)
+
+Codex에게 넘기기 전에 **반드시 먼저 확정해야 하는 것들**이다.
+여기가 비어 있으면 구현이 임의값으로 채워진다.
+
+- **2.5 이동** — Approach/Circle/Retreat 각각의 진입·이탈 조건,
+  선회 방향 결정 규칙, 이동 속도
+- **6 Utility** — ① 행동 후보 목록 ② 점수 입력(Considerations)
+  ③ 각 입력의 곡선. *"상황은 행동을 결정하지 않고 행동의 가능성을
+  높인다"* 를 숫자로 옮기는 작업이다
+- **8 GOAP** — 목표 목록, 액션의 전제조건/효과/비용.
+  §7의 "플랜을 하드코딩하지 말 것"을 지킬 것
+
 
 ### (이력) 2026-09-01 시점 체크리스트
 
