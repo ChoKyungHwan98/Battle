@@ -2351,3 +2351,78 @@ PIE를 여러 번 켰다 끄는 과정에서 **에디터 월드의** 보스 메�
 넣는 것**이다 — 커밋 전까지 전방으로 `AttackLungeDistance`만큼
 밀어주면 애니메이션과 이동이 맞는다. 거리 압박이라는 설계 의도와도
 맞는다. 아직 넣지 않았다.
+
+---
+
+## 공격 런지 (2026-09-08)
+
+### 왜 넣는가
+
+`Ability_Combo_01`은 **앞으로 파고들며 치는 동작**인데 루트 모션이
+없다(실측: 공격 중 액터 이동 0). 파라곤은 이 전진을 **어빌리티 코드**로
+처리했다. 우리가 그 코드를 안 넣으면 보스는 앞발을 못 박은 채 상체만
+기울이고 뒷다리는 허공에 뜬다 — "떠 보인다"의 실체가 이것이다.
+
+발바닥 소켓(`Foot_L`) 높이를 3,010회 측정한 결과 공격 중 최대 **+93**
+(바닥 -8 기준 101 위, 보스 키의 19%). 큰 스텝을 밟는데 몸이 안 나간다.
+
+### 구조
+
+```
+TryAttack        → bHasHitThisAttack = false
+                 → bLungeActive = true
+                 → PlayAnimMontage
+
+Tick (런지 중)    → step = (AttackLungeDistance / WindupTime) × DeltaTime
+                 → AddActorLocalOffset( (step, 0, 0), sweep = true )
+
+OnAttackCommit   → bCanTurn = false        ← 회전 금지
+                 → bLungeActive = false    ← 전진 정지
+OnAttackEnd      → bLungeActive = false    (안전망)
+```
+
+**커밋 시점에 회전과 전진이 같이 멈춘다.** 이미 정한 "커밋 이후에는
+방향을 못 바꾼다"는 규칙이 이동에도 그대로 적용된다. 플레이어가
+윈드업을 보고 옆으로 빠지면 보스는 빈 곳으로 파고든다.
+
+`AddActorLocalOffset`은 액터 로컬 +X(정면)로 민다. 방향 벡터를
+따로 만들 필요가 없다. `sweep=true`라 벽이나 플레이어를 뚫지 않는다.
+
+| 변수 | 값 | 비고 |
+|---|---|---|
+| `AttackLungeDistance` | 120 | **Instance Editable** — 레벨에서 보스 선택 후 바로 조절 |
+| `WindupTime` | 0.30 | 이 시간 동안 전진 → 속도 400 uu/s |
+| `bLungeActive` | 런타임 | |
+
+### CharacterMovement를 안 쓴 이유
+
+처음에 `AddMovementInput` + `MaxWalkSpeed` 방식으로 만들었는데
+보스가 전혀 안 움직였다. 원인은 `CharacterMovementComponent`가
+**컨트롤러 없는 폰의 입력을 소비하지 않기** 때문이다
+(`bRunPhysicsWithNoController` 기본 false). AIController를 붙이고
+플래그를 켜도 안 됐다.
+
+지금 필요한 건 "애니메이션에 맞춘 정해진 거리 이동"이지 "가감속이
+있는 이동"이 아니다. 루트 모션의 대체물이므로 직접 오프셋이 맞다.
+**Approach/Circle/Retreat 같은 진짜 이동을 붙일 때 CMC로 간다.**
+
+### 계측 함정 — 에디터 백그라운드 3 FPS
+
+MCP로 PIE를 띄워놓고 창을 포커스하지 않으면 에디터가
+**틱 레이트를 3 FPS로 제한**한다(`Use Less CPU when in Background`).
+로그: `Bringing World ... up for play (max tick rate 3)`.
+
+이 상태에서 이동 거리를 재면 완전히 틀린 값이 나온다. 실제로
+`step` 로그가 **133.3/프레임**으로 찍혔다 — `400 × DeltaTime`에서
+DeltaTime이 0.333이라는 뜻이다. 윈드업 0.3초가 한 프레임도 안 되니
+런지가 사실상 1프레임 만에 끝난다.
+
+**이동 관련 수치는 반드시 포커스된 창에서 사람이 확인해야 한다.**
+
+### 부수 변경
+
+- `AutoPossessAI = PlacedInWorldOrSpawned` — 지금 쓰진 않지만
+  이후 내비게이션·퍼셉션에 필요하다.
+- `CharMoveComp.bRunPhysicsWithNoController = true`
+- Tick 디버그에 노란 구(`Foot_L` 소켓) 추가. 매 프레임 로그를 찍던
+  PrintString은 스팸이라 제거했다.
