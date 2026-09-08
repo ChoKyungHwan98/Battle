@@ -295,3 +295,43 @@ Root
    미확인. 없으면 플레이어처럼 타이머 방식으로 간다.
 4. **`Crunch_Extents` / `Crunch_ShadowCyl`** — 콜리전/그림자용 보조 메시.
    히트박스 크기 잡을 때 참고 가능.
+
+
+---
+
+## ⚠ ParagonCrunch를 다시 받으면 해야 할 것 (2026-09-08)
+
+`ParagonCrunch`는 2GB라 `.gitignore`에 넣었다. Fab에서 다시 받으면
+아래 수정이 사라지므로 **매번 다시 해야 한다.**
+
+### 1. `CrunchPlayerCharacter` 컴파일 에러
+
+```
+CrunchPlayerCharacter'에서 "ResetOrientationAndPosition" 함수를 찾을 수 없습니다
+```
+
+파라곤에 딸려온 **언리얼 3인칭 템플릿 캐릭터**(우리는 안 씀)에 VR 노드가
+들어 있는데, UE 5.8에서 그 함수가 없어졌다. PIE를 켤 때마다 경고창이 뜬다.
+
+**해결**: `CrunchPlayerCharacter`의 EventGraph에서 두 노드 삭제
+- `Reset Orientation and Position` (CallFunction)
+- `InputAction ResetVR` (이벤트)
+
+남는 경고(`InputAxis MoveForward`, `Turn`, `Jump` 등)는 구식 입력 시스템을
+참조해서 나는 것으로, **에러가 아니라 무시해도 된다.**
+
+### 2. 보스가 참조하는 것
+
+우리 `ABP_Boss_Crunch`는 파라곤 원본 `Crunch_AnimBlueprint`의 복제본이고,
+`CastToCrunchPlayerCharacter` 노드를 그대로 갖고 있다. 그래서
+`CrunchPlayerCharacter`를 **지우면 안 된다** (지우려면 그 캐스트들을 먼저
+제거해야 함). 캐스트는 실패해도 조용히 넘어가므로 동작에는 문제없다.
+
+우리 보스가 실제로 쓰는 것:
+```
+/Game/ParagonCrunch/Characters/Heroes/Crunch/Meshes/Crunch          메시
+/Game/ParagonCrunch/Characters/Heroes/Crunch/Meshes/Crunch_Skeleton 스켈레톤
+/Game/ParagonCrunch/Characters/Heroes/Crunch/Crunch_AnimBlueprint   AnimBP 원본
+/Game/ParagonCrunch/Characters/Heroes/Crunch/Animations/*           애니메이션
+/Game/ParagonCrunch/FX/Particles/Abilities/*                        이펙트
+```
