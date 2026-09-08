@@ -2033,3 +2033,103 @@ Tick: DelayPercent = FInterpToConstant(DelayPercent, 체력비율, DeltaTime, De
 - 스태미나 소진 시 붉게 깜빡임
 - 스태미나 가득 차면 페이드아웃 (다크소울 방식)
 - 숫자 표시 / 아이콘
+
+---
+
+## 보스 히트박스 재설계 — 범위 판정에서 소켓 추적 판정으로 (2026-09-08)
+
+### 왜 바꿨나
+
+기존 보스 공격 판정은 `ApplyRadialDamage`였다. **액터 중심에서 앞으로
+150cm 떨어진 고정 지점에 반지름 110cm 구를 한 번 띄우는** 방식이다.
+문제가 셋이다.
+
+1. **애니메이션과 무관하다.** 주먹이 어디 있든 판정은 항상 몸 앞
+   같은 자리에 뜬다. 왼손을 뻗든 오른손을 뻗든 똑같다.
+2. **한 프레임만 검사한다.** 타이머가 울린 그 순간에 플레이어가
+   구 밖에 있으면 그 뒤 프레임에 정통으로 맞아도 판정이 없다.
+   반대로 그 한 순간만 걸치면 스치기만 해도 맞는다.
+3. **크기가 과하다.** 반지름 110 + 전방 150 오프셋이면 실질 판정
+   범위가 몸 앞 260cm다. 보스를 1.7배로 키우면 더 심해진다.
+
+**"공격당하는 판정을 범위로 잡는 게 맞느냐"** — 맞지 않다.
+상용 액션 게임은 무기/주먹 본에 히트박스를 붙이고, 액티브 프레임
+동안 그 히트박스를 매 프레임 검사한다. 그 구조로 바꿨다.
+
+### 새 구조
+
+```
+TryAttack
+  bHasHitThisAttack = false      ← 이번 공격에서 아직 안 맞췄다
+  몽타주 재생
+  타이머: OnAttackCommit (WindupTime)     — 회전 금지
+  타이머: OnAttackHit    (WindupTime)     — 액티브 프레임 시작
+  타이머: OnAttackEnd    (AttackTotalTime)
+
+OnAttackHit        bHitWindowOpen = true
+                   타이머: OnHitWindowClose (ActiveTime)
+OnHitWindowClose   bHitWindowOpen = false
+
+Tick
+  └ (회전 처리 후)
+    Branch(bHitWindowOpen)
+      └ Branch(bHasHitThisAttack) → else
+          ├ Branch(bShowHitDebug) → DrawDebugSphere(주먹 위치, 반경, 0.05초)
+          └ SphereOverlapActors(
+                SpherePos      = GetSocketLocation(Mesh, AttackSocket),
+                SphereRadius   = AttackHitRadius,
+                ObjectTypes    = [Pawn],
+                ActorClassFilter = BP_Player_Combat_C)
+              └ Branch(맞았나)
+                  → ApplyDamage(OutActors[0], AttackDamage, ...)
+                  → bHasHitThisAttack = true
+```
+
+**핵심 세 가지**
+
+- **소켓 추적** — 판정 구가 `AttackSocket`(현재 `hand_l`) 본을 따라간다.
+  주먹이 움직이면 판정도 같이 움직인다. 공격마다 소켓을 바꿔 끼우면
+  된다 (어퍼컷은 `hand_l`, 리버블로는 `hand_r`…).
+- **액티브 윈도우** — `WindupTime`부터 `ActiveTime` 동안 **매 프레임**
+  검사한다. 한 순간 스냅샷이 아니다. 다크소울/세키로의 액티브 프레임
+  개념과 같다.
+- **1회 히트 보장** — `bHasHitThisAttack`으로 한 공격당 한 번만
+  데미지가 들어간다. 매 프레임 검사인데 이게 없으면 9프레임 동안
+  9번 맞는다.
+
+| 변수 | 의미 | 값 |
+|---|---|---|
+| `AttackSocket` | 판정을 붙일 본 이름 | `hand_l` |
+| `AttackHitRadius` | 판정 구 반지름 (월드 cm) | 85 |
+| `ActiveTime` | 액티브 프레임 길이 | 0.15초 |
+| `bHitWindowOpen` | 지금 판정 중인가 | 런타임 |
+| `bHasHitThisAttack` | 이번 공격에서 맞췄나 | 런타임 |
+
+`bShowHitDebug`를 켜두면 액티브 프레임 동안 **주먹을 따라다니는
+디버그 구**가 보인다. 포트폴리오 영상에서 판정을 보여주기에도 좋다.
+
+### 아직 안 바꾼 것
+
+플레이어 공격은 여전히 `ApplyRadialDamage`다. 같은 구조로 바꿀 수
+있지만 지금은 체감 문제가 보고되지 않아 보류했다.
+
+---
+
+## 보스 배치 수정 (2026-09-08)
+
+- **떠 있던 문제** — 아레나 바닥이 `z = -8`인데 액터 z가 170으로
+  고정돼 있었다. 캡슐 반높이 110 × 스케일 1.45 = 159.5이므로
+  캡슐 바닥이 z=10.5, 즉 **18.5cm 떠 있었다.**
+  스케일을 1.7로 올리면서 z를 **179**(= -8 + 110×1.7)로 다시 계산했다.
+- **스케일 1.45 → 1.7.** 크런치 메시 높이는 260cm이므로 실제 신장은
+  442cm. 플레이어(약 180cm)의 2.5배.
+- **카메라 관통** — 보스 캡슐과 메시가 **Camera 채널을 Ignore**
+  하도록 되어 있었는데, **레벨 인스턴스의 오버라이드가 블루프린트
+  기본값을 덮고 있어서 실제로는 적용되지 않았다.** 인스턴스 값을
+  블루프린트와 같게 다시 맞췄다.
+  - 캡슐: ObjectType `Pawn` / QueryAndPhysics / Visibility·Camera Ignore
+  - 메시: ObjectType `Pawn` / QueryOnly / Pawn·Vehicle·Visibility·Camera Ignore
+
+  카메라 스프링암은 Camera 채널로 충돌 검사를 한다. 보스가 이 채널을
+  막고 있으면 보스 몸에 스프링암이 걸려 카메라가 **플레이어 안쪽으로
+  빨려 들어간다.** 소울류 보스가 전부 이 처리를 해 두는 이유다.
