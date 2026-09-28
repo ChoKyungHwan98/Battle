@@ -297,6 +297,7 @@ def scenario():
     def click(k):key(k,'down');wait(.055);key(k,'up')
     check(f'int({T}.setup())');wait(.8)
     cap('idle')
+    wait(.35)  # Screenshot readback must finish before a timed short tap.
     check(f'int({T}.begin_roll())')
     key('SpaceBar','down');wait(.06)
     check(f'{T}.state()',2)

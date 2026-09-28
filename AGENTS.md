@@ -1,5 +1,7 @@
 # Battle workspace
 
+- Timed roll measurements must exclude screenshot readback stalls; measure travel from the captured `DodgeMoveStartLocation`, because the first observed PIE frame has already moved the capsule.
+
 - Use Unreal Editor MCP to inspect and change Unreal assets. Preserve the existing in-progress project work.
 - Before restarting or closing Unreal Editor, account for unsaved assets and close it gracefully.
 - Do not run `Plugins/VibeUE/BuildAndLaunchGame.ps1` while an editor is open: that script can forcibly terminate UnrealEditor processes.
