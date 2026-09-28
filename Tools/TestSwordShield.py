@@ -3,6 +3,9 @@ import unreal
 import json
 
 start_location = None
+start_foot_pose = None
+start_rotation = None
+start_control_rotation = None
 
 
 def world():
@@ -14,15 +17,24 @@ def player():
 
 
 def setup():
-    global start_location
+    global start_location, start_rotation, start_control_rotation
     p=player()
     for actor in unreal.GameplayStatics.get_all_actors_of_class(world(),unreal.Actor):
         if 'BP_Boss_Crunch' in actor.get_class().get_name():
             actor.set_actor_location(unreal.Vector(10000,10000,190),False,False)
             actor.set_actor_tick_enabled(False)
+            # CharacterMovement ticks separately from the Actor and can keep
+            # executing a queued boss charge even after Actor Tick is disabled.
+            movement = actor.get_component_by_class(unreal.CharacterMovementComponent)
+            if movement:
+                movement.stop_movement_immediately()
+                movement.disable_movement()
+                movement.set_component_tick_enabled(False)
     p.set_editor_property('MaxHealth',2000)
     unreal.GameplayStatics.apply_damage(p,-2000,None,None,unreal.DamageType)
     start_location=p.get_actor_location()
+    start_rotation=p.get_actor_rotation()
+    start_control_rotation=p.get_controller().get_control_rotation()
     return p is not None
 
 
@@ -138,8 +150,7 @@ def locomotion_scenario():
 
 def setup_strafe():
     assert setup()
-    # Free movement deliberately rotates the character toward travel every tick.
-    # Lock to the inert boss so the eight inputs exercise the full direction axis.
+    # Lock to the inert boss so eight inputs exercise target-facing strafing.
     p=player()
     boss=next(a for a in unreal.GameplayStatics.get_all_actors_of_class(world(),unreal.Actor)
               if 'BP_Boss_Crunch' in a.get_class().get_name())
@@ -150,6 +161,29 @@ def setup_strafe():
 
 def anim_direction():
     return player().mesh.get_anim_instance().get_editor_property('Direction')
+
+
+def begin_foot_pose():
+    global start_foot_pose
+    mesh = player().mesh
+    start_foot_pose = [mesh.get_socket_transform(b, unreal.RelativeTransformSpace.RTS_COMPONENT).translation
+                       for b in ['foot_l', 'foot_r']]
+    return True
+
+
+def foot_pose_change():
+    mesh = player().mesh
+    return max((mesh.get_socket_transform(b, unreal.RelativeTransformSpace.RTS_COMPONENT).translation - initial).length()
+               for b, initial in zip(['foot_l', 'foot_r'], start_foot_pose))
+
+
+def reset_motion_fixture():
+    p = player()
+    p.character_movement.stop_movement_immediately()
+    p.set_actor_location(start_location, False, False)
+    p.set_actor_rotation(start_rotation, False)
+    p.get_controller().set_control_rotation(start_control_rotation)
+    return True
 
 
 def eight_direction_scenario():
@@ -166,17 +200,56 @@ def eight_direction_scenario():
         ('left',['A'],60,120),('back-left',['S','A'],105,165),
         ('back',['S'],150,181),('back-right',['S','D'],105,165),
         ('right',['D'],60,120),('forward-right',['W','D'],20,75)]:
+        check(f'int({T}.reset_motion_fixture())')
+        wait(.35)
         for k in keys:key(k,'down')
         wait(.48)
         check(f'int({lo} <= abs({T}.anim_direction()) <= {hi})')
         check(f'int({T}.player().mesh.get_anim_instance().get_editor_property("GroundSpeed") > 100)')
+        check(f'int({T}.begin_foot_pose())')
         cap(name)
+        wait(.17)
+        check(f'int({T}.foot_pose_change() > 10)')
+        cap(name+'-step')
         for k in keys:key(k,'up')
         wait(.18)
     wait(.25);check(f'int({T}.player().mesh.get_anim_instance().get_editor_property("GroundSpeed") < 5)')
     cap('return-idle')
     steps.append({'action':'assert_log','not_contains':'LogScript: Warning'})
     return {'name':'SwordShield continuous idle and eight direction blend','steps':steps,'teardown':{'stop_pie':True}}
+
+
+def free_locomotion_pose_scenario():
+    T="__import__('TestSwordShield')"
+    steps=[{'action':'start_pie'},{'action':'wait_for_pie','timeout_seconds':20}]
+    def wait(t):steps.append({'action':'wait','seconds':t})
+    def key(k,event):steps.append({'action':'inject_key','key':k,'event':event})
+    def check(expr):steps.append({'action':'python_assert_number','expression':expr,'expected':1,'operator':'eq','tolerance':0})
+    def cap(name):steps.append({'action':'capture_game','name':name})
+    check(f'int({T}.setup())');wait(.5)
+    check(f'int({T}.player().get_editor_property("MovementMode").value == 0)')
+    check(f'int({T}.player().character_movement.get_editor_property("orient_rotation_to_movement"))')
+    cap('free-idle')
+    for name,keys,lo,hi in [
+        ('free-forward',['W'],0,30),('free-forward-left',['W','A'],20,75),
+        ('free-left',['A'],60,120),('free-back-left',['S','A'],105,165),
+        ('free-back',['S'],150,181),('free-back-right',['S','D'],105,165),
+        ('free-right',['D'],60,120),('free-forward-right',['W','D'],20,75)]:
+        for k in keys:key(k,'down')
+        wait(.48)
+        check(f'int({T}.player().mesh.get_anim_instance().get_editor_property("GroundSpeed") > 100)')
+        check(f'int({T}.begin_foot_pose())')
+        cap(name)
+        wait(.17)
+        check(f'int({T}.foot_pose_change() > 10)')
+        cap(name+'-step')
+        for k in keys:key(k,'up')
+        wait(.18)
+    wait(.25)
+    check(f'int({T}.player().mesh.get_anim_instance().get_editor_property("GroundSpeed") < 5)')
+    cap('free-return-idle')
+    steps.append({'action':'assert_log','not_contains':'LogScript: Warning'})
+    return {'name':'Free movement faces travel and advances foot pose','steps':steps,'teardown':{'stop_pie':True}}
 
 
 def sprint_lock_scenario():
@@ -189,6 +262,8 @@ def sprint_lock_scenario():
     check(f'int({T}.setup_strafe())');wait(.3)
     check(f'int({T}.player().get_editor_property("MovementMode").value == 1)')
     cap('locked-idle')
+    # A viewport capture can stall the first input tick past the Hold threshold.
+    wait(.35)
     key('SpaceBar','down');wait(.06)
     check(f'int({T}.player().get_editor_property("MovementMode").value == 1)')
     check(f'int({T}.player().get_editor_property("SprintResumeLockTarget") is None)')
