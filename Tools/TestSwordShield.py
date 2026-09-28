@@ -104,6 +104,38 @@ def commitment_scenario():
     return {'name':'SwordShield attack commitment and guard-break recovery','steps':steps,'teardown':{'stop_pie':True}}
 
 
+def locomotion_scenario():
+    T="__import__('TestSwordShield')"
+    steps=[{'action':'start_pie'},{'action':'wait_for_pie','timeout_seconds':20}]
+    def wait(t):steps.append({'action':'wait','seconds':t})
+    def key(k,event):steps.append({'action':'inject_key','key':k,'event':event})
+    def check(expr,expected,op='eq'):
+        assertion={'action':'python_assert_number','expression':expr,'expected':expected,'operator':op}
+        if op=='eq':assertion['tolerance']=0
+        steps.append(assertion)
+    def cap(name):steps.append({'action':'capture_game','name':name})
+    check(f'int({T}.setup())',1);wait(.8)
+    check(f'{T}.player().mesh.get_anim_instance().get_editor_property("GroundSpeed")',0)
+    cap('new-idle')
+    key('W','down');wait(.60)
+    check(f'{T}.player().mesh.get_anim_instance().get_editor_property("GroundSpeed")',150,'gt')
+    check(f'int({T}.player().mesh.get_anim_instance().get_editor_property("ShouldMove"))',1)
+    cap('forward')
+    key('W','up');wait(.20)
+    key('S','down');wait(.60)
+    check(f'{T}.player().mesh.get_anim_instance().get_editor_property("GroundSpeed")',150,'gt')
+    cap('backward')
+    key('S','up');wait(.20)
+    key('A','down');wait(.60);cap('left')
+    key('A','up');wait(.20)
+    key('D','down');wait(.60);cap('right')
+    key('D','up');wait(.30)
+    check(f'{T}.player().mesh.get_anim_instance().get_editor_property("GroundSpeed")',5,'lt')
+    cap('return-idle')
+    steps.append({'action':'assert_log','not_contains':'LogScript: Warning'})
+    return {'name':'SwordShield output locomotion','steps':steps,'teardown':{'stop_pie':True}}
+
+
 def scenario():
     T="__import__('TestSwordShield')"
     steps=[{'action':'start_pie'},{'action':'wait_for_pie','timeout_seconds':20}]

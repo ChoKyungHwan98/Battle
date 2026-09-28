@@ -63,11 +63,18 @@ Sword & Shield Animset Pro의 움직임을 현재 Quinn 플레이어에 리타�
 - 애니메이션 BP: `/Game/BossArena/Player/Animation/ABP_Player_Combat`
 - 새 에셋: `/Game/BossArena/Player/Animation/SwordShield`
 - 리타게터: `Retarget/RTG_Kubold_Quinn`
-- 이동 BlendSpace: `BS_SwordShield_8Dir`
+- 초기 실험 BlendSpace: `BS_SwordShield_8Dir` (현재 출력에는 사용하지 않음)
+- 실제 이동 BlendSpace: `BS_SwordShield_8Dir_Runtime` (기존 정상 보간 구조를 복사하고 검·방패 클립 27개를 연결)
 - 공격·반응 몽타주: `Montages`
 - 작업 전 플레이어/AnimBP/입력 복사본: `Backup`
 
 원본 Kubold 에셋은 `/Game/ThirdParty/Kubold/SwordShieldAnimsetPro`에 남아 있다. 작업 스크립트는 `Tools/ConnectSwordShield.py`, PIE 검사 시나리오는 `Tools/TestSwordShield.py`다. 연결 스크립트는 작업 전 복사본의 노드 ID를 기준으로 만든 단계별 변경 기록이며 이미 적용된 그래프에 무작정 재실행하지 않는다.
+
+### 이동 모션 출력 경로 수정 (2026-09-28)
+
+첫 검증에서는 이동 속도와 상태만 검사해, 화면에 옛 이동 자세가 나온 문제를 놓쳤다. `Main States`의 `Locomotion` 상태는 이름이 같은 다른 상태 머신이 아니라 **`Locomotion#1`의 Use Cached Pose**를 출력한다. 따라서 AnimGraph의 `BS_SwordShield_8Dir_Runtime` → `ShouldMove` 블렌드 → `Save Cached Pose 'Locomotion'` → `Main States.Locomotion` → 최종 출력이 실제 경로다.
+
+최초 `BS_SwordShield_8Dir`은 샘플 36개가 저장되어 있었지만, PIE에서 이동 자세가 나오지 않았다. 이를 사용하지 않고 기존 정상 `BS_Idle_Walk_Run`의 보간 구조를 별도 복사한 `BS_SwordShield_8Dir_Runtime`에 27개 검·방패 클립을 연결했다. 작업 스크립트는 `Tools/FixSwordShieldLocomotion.py`다. 기존 원본과 최초 실험 에셋은 보존했다.
 
 ## 검증 기록
 
@@ -79,6 +86,8 @@ Sword & Shield Animset Pro의 움직임을 현재 Quinn 플레이어에 리타�
 | `20260928T090449Z-57638E9B` | 21개 통과 | 공격 초반 회피 예약, 후딜 즉시 회피, 남은 공격 타이머 취소, 일반 피격 중 회피 제한, 보스와 같은 호출 순서의 가드 브레이크, 이전 타이머와 기상 모션의 충돌 방지 |
 
 두 시나리오 구간에서 `LogScript: Warning`이 없음을 검사했다. 대기·공격·점프·가드·구르기·넘어짐 캡처를 열어 자세와 무기 부착을 확인했다. 결과 JSON과 이미지 경로는 `Saved/VibeUE/Scenarios`다. 타격 범위의 붉은 디버그 표시는 플레이어 `bShowHitDebug=false`로 기본 숨김 처리했다.
+
+이동 출력 수정 후 `20260928T093346Z-85BF6145`에서 7개 수치/로그 검사를 통과했고, 실제 PIE 캡처의 전진·후진·좌·우·정지 자세를 직접 확인했다. 이동 중 검·방패 자세가 표시된다. `20260928T091949Z-2329D84F`, `20260928T092843Z-F34E29D6`의 캡처는 원인 분석 과정에서 이동 자세가 나오지 않던 증거다.
 
 이는 입력과 상태 연결 검증이다. 보스와 맞붙었을 때의 난이도, 원작 수준의 손맛, 모든 방향의 발 미끄러짐까지 보장하는 검사는 아니다. 다음 플레이테스트에서는 공격 후딜, 무적 종료 시점, 보스 사거리의 조합을 판단하면 된다.
 
