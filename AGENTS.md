@@ -14,6 +14,7 @@
 - UE 5.8 `FAnimNode_BlendListByBool` deliberately selects pose index 0 for `true` and index 1 for `false`; verify this in engine source before rewiring animation branches.
 - Enhanced Input `InputTriggerHold` can emit `Started` before its hold threshold; wire sprint activation to `Triggered`, then verify a short tap and long hold in a timed PIE scenario.
 - Pausing a dynamic montage immediately after starting it can freeze a near-zero blend-in weight; capture a timed PIE frame after its blend-in interval before judging the pose.
+- Blueprint cast output pin labels are localized (for example `As플레이어 컨트롤러`); inspect the generated pins and connect by their actual names. UE 5.8 sequencer-backed animation keys live through `data_model_interface` and the concrete `controller`, while deprecated `data_model`/raw track getters can be empty.
 - Retargeted Kubold clips can leave template IK foot targets static; if feet freeze despite valid BlendSpace inputs, compare timed component-space foot poses with Control Rig Alpha=0 and verify visible stepping before restoring IK.
 - For timed Hold-input tests, let PIE tick after a viewport capture before key-down; the capture stall can inflate the first input DeltaTime past the hold threshold. Actor Tick off alone also does not stop CharacterMovement in a test fixture.
 - For a BlendSpace with an idle row, feed its pose directly into the active cached locomotion pose; test all eight directions while actually locked on, because free movement rotates toward travel and can make the measured relative direction stay near zero.

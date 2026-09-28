@@ -1,5 +1,7 @@
 # 다크소울3를 참고한 플레이어 조작 조정
 
+2026-09-29 카메라 원본 행, 공격 루트 이동, 공격 구간, 입력 예약의 추가 적용·차이 분석은 [DS3 플레이어 조작·카메라 참조 사양](docs/reference/ds3_player_control.md)을 본다. 아래 내용은 앞선 구르기 폴리싱 당시의 기록이다.
+
 ## 무엇을 참고했는가
 
 2026-09-28에 확인한 [Souls Modding의 TAE 설명](https://soulsmodding.com/doku.php?id=format:tae)은 애니메이션 안에서 무적, 행동 취소, 회전, 스태미나 관련 구간을 시간으로 구분한다. TAE 이벤트는 초 단위 값으로 저장된다. [기초 문서](https://soulsmodding.com/doku.php?id=tutorial:basics)는 DS3의 플레이어 상태 제어에 HKS/HKB가 관여한다고 설명한다.
