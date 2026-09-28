@@ -136,6 +136,82 @@ def locomotion_scenario():
     return {'name':'SwordShield output locomotion','steps':steps,'teardown':{'stop_pie':True}}
 
 
+def setup_strafe():
+    assert setup()
+    # Free movement deliberately rotates the character toward travel every tick.
+    # Lock to the inert boss so the eight inputs exercise the full direction axis.
+    p=player()
+    boss=next(a for a in unreal.GameplayStatics.get_all_actors_of_class(world(),unreal.Actor)
+              if 'BP_Boss_Crunch' in a.get_class().get_name())
+    boss.set_actor_location(p.get_actor_location()+p.get_actor_forward_vector()*1200,False,False)
+    p.call_method('ToggleLockOn')
+    return p.get_editor_property('LockOnTarget') == boss
+
+
+def anim_direction():
+    return player().mesh.get_anim_instance().get_editor_property('Direction')
+
+
+def eight_direction_scenario():
+    T="__import__('TestSwordShield')"
+    steps=[{'action':'start_pie'},{'action':'wait_for_pie','timeout_seconds':20}]
+    def wait(t):steps.append({'action':'wait','seconds':t})
+    def key(k,event):steps.append({'action':'inject_key','key':k,'event':event})
+    def check(expr,expected=1):steps.append({'action':'python_assert_number','expression':expr,'expected':expected,'operator':'eq','tolerance':0})
+    def cap(name):steps.append({'action':'capture_game','name':name})
+    check(f'int({T}.setup_strafe())');wait(.8);cap('idle')
+    # Each capture and angle assertion is taken while the keys remain held.
+    for name,keys,lo,hi in [
+        ('forward',['W'],0,30),('forward-left',['W','A'],20,75),
+        ('left',['A'],60,120),('back-left',['S','A'],105,165),
+        ('back',['S'],150,181),('back-right',['S','D'],105,165),
+        ('right',['D'],60,120),('forward-right',['W','D'],20,75)]:
+        for k in keys:key(k,'down')
+        wait(.48)
+        check(f'int({lo} <= abs({T}.anim_direction()) <= {hi})')
+        check(f'int({T}.player().mesh.get_anim_instance().get_editor_property("GroundSpeed") > 100)')
+        cap(name)
+        for k in keys:key(k,'up')
+        wait(.18)
+    wait(.25);check(f'int({T}.player().mesh.get_anim_instance().get_editor_property("GroundSpeed") < 5)')
+    cap('return-idle')
+    steps.append({'action':'assert_log','not_contains':'LogScript: Warning'})
+    return {'name':'SwordShield continuous idle and eight direction blend','steps':steps,'teardown':{'stop_pie':True}}
+
+
+def sprint_lock_scenario():
+    T="__import__('TestSwordShield')"
+    steps=[{'action':'start_pie'},{'action':'wait_for_pie','timeout_seconds':20}]
+    def wait(t):steps.append({'action':'wait','seconds':t})
+    def key(k,event):steps.append({'action':'inject_key','key':k,'event':event})
+    def check(expr):steps.append({'action':'python_assert_number','expression':expr,'expected':1,'operator':'eq','tolerance':0})
+    def cap(name):steps.append({'action':'capture_game','name':name})
+    check(f'int({T}.setup_strafe())');wait(.3)
+    check(f'int({T}.player().get_editor_property("MovementMode").value == 1)')
+    cap('locked-idle')
+    key('SpaceBar','down');wait(.06)
+    check(f'int({T}.player().get_editor_property("MovementMode").value == 1)')
+    check(f'int({T}.player().get_editor_property("SprintResumeLockTarget") is None)')
+    key('SpaceBar','up');wait(.9)
+    key('W','down');key('SpaceBar','down');wait(.12)
+    check(f'int(not {T}.player().get_editor_property("bIsSprinting"))')
+    check(f'int({T}.player().get_editor_property("MovementMode").value == 1)')
+    wait(.32)
+    check(f'int({T}.player().get_editor_property("bIsSprinting"))')
+    check(f'int({T}.player().get_editor_property("MovementMode").value == 0)')
+    check(f'int({T}.player().get_editor_property("LockOnTarget") is None)')
+    check(f'int({T}.player().get_editor_property("SprintResumeLockTarget") is not None)')
+    cap('sprint-free')
+    key('SpaceBar','up');key('W','up');wait(.35)
+    check(f'int(not {T}.player().get_editor_property("bIsSprinting"))')
+    check(f'int({T}.player().get_editor_property("MovementMode").value == 1)')
+    check(f'int({T}.player().get_editor_property("LockOnTarget") is not None)')
+    check(f'int({T}.player().get_editor_property("SprintResumeLockTarget") is None)')
+    cap('lock-restored')
+    steps.append({'action':'assert_log','not_contains':'LogScript: Warning'})
+    return {'name':'Lock-on suspended while Space sprint is held','steps':steps,'teardown':{'stop_pie':True}}
+
+
 def scenario():
     T="__import__('TestSwordShield')"
     steps=[{'action':'start_pie'},{'action':'wait_for_pie','timeout_seconds':20}]
