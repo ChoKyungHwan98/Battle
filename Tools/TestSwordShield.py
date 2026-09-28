@@ -1,0 +1,167 @@
+"""PIE scenario helpers. Only transient PIE actors/settings are changed."""
+import unreal
+import json
+
+start_location = None
+
+
+def world():
+    return unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world()
+
+
+def player():
+    return unreal.GameplayStatics.get_player_character(world(),0)
+
+
+def setup():
+    global start_location
+    p=player()
+    for actor in unreal.GameplayStatics.get_all_actors_of_class(world(),unreal.Actor):
+        if 'BP_Boss_Crunch' in actor.get_class().get_name():
+            actor.set_actor_location(unreal.Vector(10000,10000,190),False,False)
+            actor.set_actor_tick_enabled(False)
+    p.set_editor_property('MaxHealth',2000)
+    unreal.GameplayStatics.apply_damage(p,-2000,None,None,unreal.DamageType)
+    start_location=p.get_actor_location()
+    return p is not None
+
+
+def begin_roll():
+    global start_location
+    start_location=player().get_actor_location()
+    return True
+
+
+def roll_distance():
+    return (player().get_actor_location()-start_location).length()
+
+
+def state():
+    return player().get_editor_property('ActionState').value
+
+
+def montage():
+    m=player().mesh.get_anim_instance().get_current_active_montage()
+    return m.get_name() if m else ''
+
+
+def hit(amount,direction='front'):
+    p=player()
+    # Spawn a plain transient damage source, not another gameplay Blueprint.
+    unreal.PIEActorService.spawn_actor('server','/Script/Engine.StaticMeshActor',unreal.Transform())
+    source=next(a for a in reversed(list(unreal.GameplayStatics.get_all_actors_of_class(world(),unreal.Actor))) if a.get_class()==unreal.StaticMeshActor.static_class())
+    source.static_mesh_component.set_mobility(unreal.ComponentMobility.MOVABLE)
+    vector=p.get_actor_right_vector() if direction=='right' else -p.get_actor_right_vector() if direction=='left' else p.get_actor_forward_vector()
+    source.set_actor_location(p.get_actor_location()+vector*300,False,False)
+    assert (source.get_actor_location()-p.get_actor_location()).length()>290
+    unreal.GameplayStatics.apply_damage(p,amount,None,source,unreal.DamageType)
+    return True
+
+
+def guard_break():
+    p=player()
+    boss=next(a for a in unreal.GameplayStatics.get_all_actors_of_class(world(),unreal.Actor)
+              if 'BP_Boss_Crunch' in a.get_class().get_name())
+    # Match the existing boss event order: remove guard, drain stamina, then damage.
+    p.call_method('ReceiveBossGuardBreak')
+    unreal.GameplayStatics.apply_damage(p,160,None,boss,unreal.DamageType)
+    return True
+
+
+def commitment_scenario():
+    T="__import__('TestSwordShield')"
+    steps=[{'action':'start_pie'},{'action':'wait_for_pie','timeout_seconds':20}]
+    def wait(t):steps.append({'action':'wait','seconds':t})
+    def key(k,event):steps.append({'action':'inject_key','key':k,'event':event})
+    def check(expr,expected=1):steps.append({'action':'python_assert_number','expression':expr,'expected':expected,'operator':'eq','tolerance':0})
+    def click(k):key(k,'down');wait(.055);key(k,'up')
+    check(f'int({T}.setup())');wait(.8)
+    click('LeftMouseButton');wait(.1);check(f'{T}.state()',4)
+    click('SpaceBar');check(f'{T}.state()',4)
+    check(f'int({T}.player().get_editor_property("bDodgeBuffered"))')
+    wait(.55);check(f'{T}.state()',2)
+    check(f'int({T}.player().get_editor_property("bDodgeBuffered"))',0)
+    steps.append({'action':'capture_game','name':'buffered-roll'})
+    wait(.8);check(f'{T}.state()',5)
+    # Late attack recovery accepts a roll immediately, without waiting for full attack end.
+    click('LeftMouseButton');wait(.70);check(f'{T}.state()',4)
+    click('SpaceBar');check(f'{T}.state()',2)
+    wait(.8);check(f'{T}.state()',5)
+    check(f'int({T}.hit(40))');wait(.13)
+    click('SpaceBar');check(f'{T}.state()',1)
+    check(f'int({T}.player().get_editor_property("bDodgeBuffered"))',0)
+    wait(.65);check(f'{T}.state()',5)
+    key('RightMouseButton','down');wait(.15);check(f'{T}.state()',3)
+    check(f'int({T}.guard_break())');wait(.95)
+    # The old 0.8-second guard-break timer must not unlock the 3.7-second knockdown.
+    check(f'{T}.state()',1)
+    check(f'int({T}.player().get_editor_property("bKnockedDown"))')
+    steps.append({'action':'capture_game','name':'guard-break-knockdown'})
+    key('RightMouseButton','up');wait(3.15)
+    check(f'{T}.state()',5)
+    check(f'int({T}.player().get_editor_property("bKnockedDown"))',0)
+    steps.append({'action':'assert_log','not_contains':'LogScript: Warning'})
+    return {'name':'SwordShield attack commitment and guard-break recovery','steps':steps,'teardown':{'stop_pie':True}}
+
+
+def scenario():
+    T="__import__('TestSwordShield')"
+    steps=[{'action':'start_pie'},{'action':'wait_for_pie','timeout_seconds':20}]
+    def wait(t): steps.append({'action':'wait','seconds':t})
+    def key(k,event):steps.append({'action':'inject_key','key':k,'event':event})
+    def check(expr,expected=1,op='eq',tol=0):steps.append({'action':'python_assert_number','expression':expr,'expected':expected,'operator':op,'tolerance':tol})
+    def cap(name):steps.append({'action':'capture_game','name':name})
+    def click(k):key(k,'down');wait(.055);key(k,'up')
+    check(f'int({T}.setup())');wait(.8)
+    cap('idle')
+    check(f'int({T}.begin_roll())')
+    key('SpaceBar','down');wait(.06)
+    check(f'{T}.state()',2)
+    check(f'int({T}.player().character_movement.is_falling())',0)
+    key('SpaceBar','up');wait(.75)
+    check(f'int({T}.player().get_editor_property("bIsSprinting"))',0)
+    check(f'{T}.roll_distance()',320,'eq',4)
+    check(f'{T}.state()',5)
+    key('W','down');key('SpaceBar','down');wait(.42)
+    check(f'int({T}.player().get_editor_property("bIsSprinting"))')
+    check(f'{T}.player().character_movement.max_walk_speed',650)
+    wait(.45);cap('sprint')
+    key('SpaceBar','up');key('W','up');wait(.35)
+    check(f'int({T}.player().get_editor_property("bIsSprinting"))',0)
+    check(f'{T}.player().character_movement.max_walk_speed',450)
+    key('F','down');wait(.13)
+    check(f'int({T}.player().character_movement.is_falling())')
+    cap('jump');key('F','up');wait(1.2)
+    click('LeftMouseButton');wait(.10)
+    check(f'int({T}.montage()=="AM_Sword_Attack_1")')
+    click('LeftMouseButton');wait(.58)
+    check(f'int({T}.montage()=="AM_Sword_Attack_2")')
+    click('LeftMouseButton');wait(.62)
+    check(f'int({T}.montage()=="AM_Sword_Attack_3")')
+    click('LeftMouseButton');wait(.62)
+    check(f'int({T}.montage()=="AM_Sword_Attack_4")')
+    cap('attack4');wait(1.1)
+    check(f'{T}.state()',5)
+    key('RightMouseButton','down');wait(.15)
+    check(f'{T}.state()',3)
+    check(f'int({T}.player().mesh.get_anim_instance().get_editor_property("bShieldGuard"))')
+    cap('guard');check(f'int({T}.hit(40))');wait(.13)
+    check(f'{T}.state()',3)
+    check(f'int({T}.montage()=="AM_Shield_BlockImpact")');cap('block-impact')
+    key('RightMouseButton','up');wait(.5)
+    check(f'{T}.state()',5)
+    check(f'int({T}.hit(40,"right"))');wait(.13)
+    check(f'{T}.state()',1)
+    check(f'int({T}.montage()=="AM_Shield_HitRight")');wait(.65)
+    check(f'{T}.state()',5)
+    check(f'int({T}.hit(180))');wait(.35)
+    check(f'int({T}.player().get_editor_property("bKnockedDown"))')
+    check(f'int({T}.montage()=="AM_Shield_Knockdown")')
+    key('F','down');key('SpaceBar','down');wait(.08)
+    check(f'{T}.state()',1)
+    check(f'int({T}.player().character_movement.is_falling())',0)
+    key('F','up');key('SpaceBar','up');wait(.6);cap('knockdown');wait(3.05)
+    check(f'{T}.state()',5)
+    check(f'int({T}.player().get_editor_property("bKnockedDown"))',0)
+    steps.append({'action':'assert_log','not_contains':'LogScript: Warning'})
+    return {'name':'SwordShield player controls and reactions','steps':steps,'teardown':{'stop_pie':True}}
