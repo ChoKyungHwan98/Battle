@@ -10,6 +10,7 @@
 | 거리 보정 | 가까워지는 적에 대한 추가 거리 보정은 계속 0. 락온 전환·해제·질주에도 같은 거리/피벗 |
 | 위치 지연 | SpringArm 위치 Lag 해제. 이동 방향에 따라 카메라가 뒤처지며 실제 거리가 변하는 현상 차단 |
 | 회전 | Controller의 RInterpTo 10 → 5. SpringArm에 추가 회전 Lag를 겹치지 않음 |
+| 밀착 각도 | 락온 Pitch 상한 25° → 0°. 가까이 붙어도 렌즈가 낮아지며 위로 올려다보는 구도를 제한. [최신 밀착 검증](close_lock_framing.md) |
 | 카메라 조준점 | 움직이는 spine_03 대신 보스 Actor 위치 + 기존 높이 100cm. 상체 모션의 상하 흔들림을 직접 따라가지 않음 |
 | 락온 표식 | 계속 실제 spine_03을 따라가는 흰색 점. 카메라 조준점과 분리 |
 | 벽 | 카메라가 벽을 통과하지 않도록 실제 SpringArm 거리 수축·복원 유지. 이때만 고정 거리의 예외 |
@@ -20,7 +21,7 @@
 
 - 최종 시나리오 `20260929T064502Z-F8B176FB`: 3m/6m/10m 락온, 해제·재설정, 실제 W/Space 질주와 대상 복귀 통과. 선언된 파일 기준 `verifiedCurrent=true`.
 - 실제 카메라 피벗부터 렌즈까지 587개 표본: 최소/최대 모두 650cm(부동소수 오차 이내), 수평 FOV 73.9185° 일정. 로그: `Saved/VibeUE/stable-lock-camera.json`.
-- 벽 검사 `20260929T063952Z-97E009CE`: 락온 상태에서도 장애물을 피하고 제거 후 650cm로 복원. 이후 카메라 설정 변경 없음.
+- 벽 검사 `20260929T063952Z-97E009CE`: 락온 상태에서도 장애물을 피하고 제거 후 650cm로 복원. 벽 충돌 설정은 유지한다.
 - 블루프린트 컴파일 오류/경고 0. 백업 `/Game/BossArena/Backup/BP_Player_Combat_PreStableCamera_20260929`.
 - 재현: `Tools/ApplyStableLockCamera.py`; 검사: `Tools/TestStableLockCamera.py`.
 
