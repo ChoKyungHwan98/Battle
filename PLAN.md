@@ -1,5 +1,15 @@
 # 세키로식 HFSM 플레이어 전투 구조 계획
 
+## 2026-09-10 보스 Utility 구현 현황
+
+승인한 8개 행동 카드의 점수 평가·가중 추첨·실행 연결을 완료했다.
+실제 회피/가드 기록, 01→02→Uppercut 3타 판정, 가드 브레이크, 벽 우회 접근,
+돌진 경로 검사, 쿨다운, 우측 상단 패널을 PIE에서 확인했다.
+현재 설명은 [BOSS_UTILITY_IMPLEMENTATION.md](BOSS_UTILITY_IMPLEMENTATION.md),
+적용값과 검증 범위는 [BOSS_UTILITY_TUNING.md](BOSS_UTILITY_TUNING.md)를 따른다.
+아래 이전 계획의 ‘미연결/관찰 후보/폐기된 01→02→03’ 기록과 구분한다.
+다음 기획 검토는 모션별 판정·반격 체감 튜닝이며, GOAP·Jump 착지·Combo_04는 아직 미구현이다.
+
 ## 프로젝트 정보
 
 - 엔진: **Unreal Engine 5.8.2**
@@ -166,23 +176,57 @@
 
 ### 보스 — 현재 상태
 
+2026-09-10 최신: [기계 복서 Utility 수치 기준](BOSS_UTILITY_TUNING.md).
+사용자가 새로 지정한 01→02→Ability_Uppercut 3타를 별도 행동으로 설계했다.
+이전의 01→02→03 체인과 다르다. 모션 확인용 AM_Boss_Combo_01_02_Uppercut을
+생성·저장했고 실전 타격/회피 관찰 연결은 아직 전이다.
+현재 구현은 단타 35/접근 60, 직전 행동 ×0.5, 관찰 0, Ready 판단 0.25초로 변경했다.
+회피 6초 구간 2회→콤보20점, 3회 이상→40점 등 전체 수치는 위 문서를 참고한다.
+
+2026-09-09 최신: [Utility AI v1 구현 기록](BOSS_UTILITY_IMPLEMENTATION.md).
+Combo_01~04는 각각 단타 모션이며 보스 3타 체인 계획은 폐기한다. 01/02는
+왼손/오른손 휘두르기로 부른다. Utility 후보는 현재 왼손 단타 / 접근 / 관찰.
+거리·정면 조건, 직전 행동 30점 감점, 가중 확률 선택을 연결했고 PIE로 확인했다.
+판단은 0.6초마다 Ready에서만 실행한다. 공격·후딜의 실행 규칙은 유지한다.
+우측 패널에 실제 점수·선택·추첨값을 추가하고 캡처로 가독성을 확인했다.
+다른 단타 기술, 슈퍼맨 펀치, 가드 브레이크, GOAP은 아직 연결 전이다.
+
+2026-09-09 기본 휘두르기 규칙 확정(첫 시험안): [BOSS_ATTACK_01_SPEC.md](BOSS_ATTACK_01_SPEC.md).
+준비 0.30초 → 방향 고정·판정 0.15초 → 후딜 0.794초. 현재 구현과 그래프를 대조했고,
+패널 전이 이유를 쉬운 문구로 변경했다. 실행 규칙과 시간은 기존 구현을 유지한다.
+실제 3타 반격과 가드 대응은 플레이테스트 항목으로 남긴다.
+
+2026-09-09 사용자 협의 정리: [BOSS_AI_PLAIN_GUIDE.md](BOSS_AI_PLAIN_GUIDE.md).
+공격 모음집은 데이터, HFSM은 실행 규칙, Utility는 행동 선택, GOAP은 조건을
+만들기 위한 행동 순서 계획으로 구분한다. 기본 Combo_01의 후딜은 기존 실측
+설정 0.794초(약 0.8초)를 첫 테스트 기준으로 채택한다. 3타 반격은 목표이며
+검증된 결과가 아니다. 다른 공격의 시간까지 일괄 확정한 것은 아니다.
+
+2026-09-08 HFSM v1 구현 기록: [BOSS_HFSM_IMPLEMENTATION.md](BOSS_HFSM_IMPLEMENTATION.md).
+BeginPlay 즉시 Combat.Ready 진입, 기존 공격 1종 상태화, 사망 중단,
+우측 상단 상태/이유 패널을 구현했다. BOSS_AI_DESIGN §15의 공격 테이블과
+당시의 3타 체인 계획은 이후 사용자 정정으로 폐기했다. 아래 과거 순서표보다 최신 기록을 우선 참고.
+
 ```
 ✔ BP_Boss_Crunch (Character 상속) + ABP_Boss_Crunch (Crunch_AnimBlueprint 복제)
-✔ 배치: Lvl_Arena_01 (0, -1200, 212), 스케일 2.0, 실신장 520cm
+✔ 배치: Lvl_Arena_01 (0, -1200, 157), 스케일 1.5 (사용자 요청)
 ✔ 콜리전: 캡슐·메시 모두 Camera 채널 Ignore (스프링암 관통 방지)
 ✔ 공격 1종 — AM_Boss_Combo_01 (우리 폴더로 복제, 슬롯 UpperBody)
-✔ AttackCommitment — OnAttackCommit에서 bCanTurn=false (커밋 후 회전 금지)
+✔ AttackCommitment — Active 진입 시 회전 잠금 (별도 OnAttackCommit 타이머 제거)
 ✔ 소켓 추적 스윕 히트박스 — 직전 프레임 주먹 → 현재 주먹 SphereTrace,
   액티브 윈도우 동안 매 프레임, bHasHitThisAttack으로 1회 히트 보장
 ✔ 추적 회전 Yaw 전용 (2026-09-08 pitch 버그 수정)
 ✔ 디버그 표시 — 청록 캡슐 / 자홍 루트 / 노란 발바닥 / 주황 판정구
 ✔ 플레이테스트 확인: 회피하면 헛치고, 후딜에 반격이 들어간다 ★ 코어 루프 성립
 
-✖ 이동 자체가 없다 (제자리 고정)
-✖ 사망 처리 없음
+✔ Utility 접근 이동 — 수평 직접 접근, 260cm 정지 목표 (장애물 경로 탐색은 미구현)
+✔ HFSM v1 — GameplayTag 단일 상태 + TransitionBossState / ExitCombat
+✔ 사망 처리 — 공격 단계 공통 중단, 타이머 해제, 판정 종료 (사망 모션은 미구현)
+✔ 홀로그램 패널 — HFSM + Utility 점수/선택/추첨, PIE 캡처 확인
 ✖ 경직 없음 (설계상 의도 — 소울라이크 보스에 상시 경직은 보스전을 무의미하게 함)
 ✖ 페이즈 전환 없음
-✖ Utility / GOAP / 홀로그램 패널 전부 미착수
+✔ Utility v1 — 왼손 단타 / 접근 / 관찰, 반복 감점과 가중 확률 선택
+✖ GOAP 미착수
 ```
 
 #### 보스 튜닝값 (현재)
@@ -193,7 +237,8 @@
 | `WindupTime` | 0.30 | 커밋 시점 = 회전 잠금 |
 | `ActiveTime` | 0.15 | 히트 윈도우 |
 | `AttackTotalTime` | 1.244 | 0.9333 ÷ 0.75 |
-| `AttackInterval` | 2.2 | 임시 (Utility가 대체할 값) |
+| `AttackInterval` | 2.2 | 이전 값, 이제 선택 타이머에서 사용하지 않음 |
+| `UtilityDecisionInterval` | 0.25 | Ready에서만 판단 |
 | `AttackHitRadius` | 85 | 주먹 반경 (월드 단위) |
 | `AttackSocket` | `hand_l` | 공격마다 교체 |
 | `AttackDamage` | 60 | |

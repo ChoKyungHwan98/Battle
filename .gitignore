@@ -11,6 +11,11 @@ Saved/
 *.VC.db
 *.VC.opendb
 
+# Python generated caches
+__pycache__/
+*.pyc
+*.pyo
+
 # Compiled source
 *.obj
 *.o

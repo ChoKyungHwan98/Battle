@@ -271,6 +271,7 @@ def policy_scenario():
     steps=[{'action':'start_pie'},{'action':'wait_for_pie','timeout_seconds':20}]
     def wait(t):steps.append({'action':'wait','seconds':t})
     def check(e,v=1):steps.append({'action':'python_assert_number','expression':e,'expected':v,'operator':'eq','tolerance':0})
+    check(f'int({T}.prepare())')
     check(f'int({T}.setup(250))');wait(1.2);check(f'int({T}.wall())')
     check(f'int({T}.wall_contact())');wait(.06)
     check(f'int({T}.player().get_editor_property("bSwordWindowOpen"))',0)

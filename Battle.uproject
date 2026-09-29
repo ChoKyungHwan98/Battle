@@ -30,6 +30,10 @@
 		{
 			"Name": "CQTestEnhancedInput",
 			"Enabled": true
+		},
+		{
+			"Name": "VibeUE",
+			"Enabled": true
 		}
 	]
 }

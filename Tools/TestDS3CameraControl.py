@@ -58,6 +58,35 @@ def vertical_fov():
     return math.degrees(2*math.atan(math.tan(math.radians(fov/2))*h/w))
 
 
+def close_frame_metric(which):
+    p=T.player();b=p.get_editor_property('LockOnTarget')
+    origin,extent=b.get_actor_bounds(False,False)
+    pc=p.get_controller();width,height=pc.get_viewport_size()
+    top=pc.project_world_location_to_screen(origin+unreal.Vector(0,0,extent.z),True)
+    bottom=pc.project_world_location_to_screen(origin-unreal.Vector(0,0,extent.z),True)
+    if which=='top': return top.y/height if top else -999
+    if which=='bottom': return bottom.y/height if bottom else -999
+    if which=='arm': return p.get_component_by_class(unreal.SpringArmComponent).target_arm_length
+    if which=='camera': return (p.get_component_by_class(unreal.CameraComponent).get_world_location()-p.get_actor_location()).length()
+    return -999
+
+
+def close_frame_scenario():
+    TQ="__import__('TestDS3CameraControl')"; T0="__import__('TestSwordShield')"
+    steps=[{'action':'start_pie'},{'action':'wait_for_pie','timeout_seconds':20}]
+    def wait(t):steps.append({'action':'wait','seconds':t})
+    def check(e,value=1,tol=0):steps.append({'action':'python_assert_number','expression':e,'expected':value,'operator':'eq','tolerance':tol})
+    check(f'int({T0}.setup())');wait(.5)
+    check(f'int({TQ}.place_boss(300))')
+    check(f'int({T0}.player().call_method("ToggleLockOn") is None)')
+    wait(1.2)
+    for name in ['top','bottom','arm','camera']:
+        check(f'{TQ}.close_frame_metric("{name}")',0,2000)
+    steps.append({'action':'capture_game','name':'locked-boss-at-300cm'})
+    return {'name':'Close lock-on frame and boss screen bounds',
+            'steps':steps,'teardown':{'stop_pie':True}}
+
+
 def scenario():
     TQ="__import__('TestDS3CameraControl')"
     T0="__import__('TestSwordShield')"
@@ -74,7 +103,9 @@ def scenario():
     steps.append({'action':'python_assert_number','expression':f'{T0}.state()',
                   'expected':4,'operator':'eq','tolerance':0})
     key('D','down');wait(.40);key('D','up')
-    check(f'int({TQ}.attack_travel()>5)')
+    check(f'int({TQ}.attack_travel()>20)')
+    steps.append({'action':'python_assert_number','expression':f'{TQ}.attack_travel()',
+                  'expected':0,'operator':'eq','tolerance':1000})
     check(f'int({TQ}.lateral_travel()<5)')
     wait(.65)
     check(f'int({T0}.state()==5)')
@@ -94,7 +125,7 @@ def guard_scenario():
     check(f'int({T0}.setup_strafe())');wait(1.1)
     check(f'int({T0}.state()==5)')
     check(f'int(abs({TQ}.vertical_fov()-43)<.3)')
-    check(f'int(abs({T0}.player().get_component_by_class(unreal.SpringArmComponent).target_arm_length-600)<5)')
+    check(f'int(abs({T0}.player().get_component_by_class(unreal.SpringArmComponent).target_arm_length-550)<5)')
     steps.append({'action':'capture_game','name':'ds3-reference-locked-frame'})
     key('LeftMouseButton','down');wait(.06);key('LeftMouseButton','up');wait(.16)
     check(f'int({T0}.state()==4)')
@@ -131,6 +162,8 @@ def cancel_scenario():
     wait(.12);check(f'int({T0}.state()==4)')
     wait(.36);check(f'int({T0}.state()==2)')
     check(f'int(not {T0}.player().get_editor_property("bDodgeBuffered"))')
+    check(f'int({T0}.player().call_method("OnAttackRecoveryTimer") is None)')
+    check(f'int({T0}.state()==2)')
     wait(.82);check(f'int({T0}.state()==5)')
     steps.append({'action':'assert_log','not_contains':'LogScript: Warning'})
     return {'name':'Attack dodge cancel at separate 60 percent phase with one buffered intent',
@@ -171,11 +204,11 @@ def range_scenario():
     check(f'int({T0}.player().call_method("ToggleLockOn") is None)')
     check(f'int({T0}.player().get_editor_property("MovementMode").value==1)')
     wait(.8)
-    check(f'int(abs({T0}.player().get_component_by_class(unreal.SpringArmComponent).target_arm_length-600)<5)')
-    check(f'int({TQ}.place_boss(1700))');wait(.12)
+    check(f'int(abs({T0}.player().get_component_by_class(unreal.SpringArmComponent).target_arm_length-550)<5)')
+    check(f'int({TQ}.place_boss(1450))');wait(.12)
     check(f'int({T0}.player().get_editor_property("MovementMode").value==1)')
-    check(f'int({TQ}.place_boss(2100))');wait(.18)
+    check(f'int({TQ}.place_boss(1650))');wait(.18)
     check(f'int({T0}.player().get_editor_property("MovementMode").value==0)')
     steps.append({'action':'assert_log','not_contains':'LogScript: Warning'})
-    return {'name':'Camera lock 15m acquisition and 20m release hysteresis',
+    return {'name':'DS3 camera lock 15m acquisition and release',
             'steps':steps,'teardown':{'stop_pie':True}}
