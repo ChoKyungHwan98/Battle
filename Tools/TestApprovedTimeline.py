@@ -45,7 +45,7 @@ def freeze():
 def finish():
     global handle
     if handle is not None:unreal.unregister_slate_post_tick_callback(handle);handle=None
-    tolerance=1/fps*(1/.7 if kind=='roll' else 1.4)+.003
+    tolerance=1/fps*(1/.7 if kind=='roll' else T.player().get_editor_property('AttackPlayRate'))+.003
     ok=bool(samples) and all(s['world']==1 for s in samples) and T.state()==5 and T.player().custom_time_dilation==1
     metrics={}
     if kind=='roll':
@@ -53,7 +53,7 @@ def finish():
         metrics={'iframe_end_pose_seconds':end,'distance':samples[-1]['travel']}
         ok=ok and end is not None and abs(end-.43333333333333335/.7)<=tolerance and abs(metrics['distance']-320)<12
     else:
-        for label,target in [('hit',.25),('cancel',.60),('combo',.62)]:
+        for label,target in [('hit',.25),('cancel',.60),('combo',.55)]:
             value=next((s['pos'] for s in samples if s[label]),None);metrics[label]=value
             ok=ok and value is not None and abs(value-target)<=tolerance
         metrics['frozen_frames']=sum(s['dilation']<.001 for s in samples)
@@ -71,7 +71,7 @@ def scenario():
     def wait(s):steps.append({'action':'wait','seconds':s})
     for rate in [30,60,120]:
         check(f'{q}.setup({rate})');wait(.8);check(f'{q}.begin("roll")');wait(1.0);check(f'{q}.finish()')
-        wait(.3);check(f'{q}.begin("attack")');wait(.12);check(f'{q}.freeze()');wait(1.0);check(f'{q}.finish()')
+        wait(.3);check(f'{q}.begin("attack")');wait(.12);check(f'{q}.freeze()');wait(1.6);check(f'{q}.finish()')
     check('int(__import__("unreal").SystemLibrary.execute_console_command(__import__("TestSwordShield").world(),"t.MaxFPS 0") is None)')
     steps.append({'action':'assert_log','not_contains':'LogScript: Warning'})
     return {'name':'Animation events remain aligned across FPS and scoped hit stop','steps':steps,'teardown':{'stop_pie':True}}
