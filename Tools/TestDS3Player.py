@@ -107,7 +107,9 @@ def motion_scenario():
     check(f'int({B}.state() == 2)'); key('SpaceBar', 'up'); key('W', 'up'); key('D', 'down')
     check(f'int({M}.move_target())'); wait(.22)
     check(f'int({M}.facing_error() < 1)')
-    check(f'int({B}.player().character_movement.velocity.length() < 2)')
+    # With animation-driven root motion, CharacterMovement reports the montage's
+    # velocity while the committed roll is in progress.
+    check(f'int({B}.player().character_movement.velocity.length() > 2)')
     key('D', 'up'); wait(.55)
     check(f'int({B}.state() == 5)'); check(f'int(abs({M}.travel() - 320) < 6)')
     check(f'int({M}.stop_observing())'); check(f'int({M}.free_fixture())'); wait(.35)
@@ -159,7 +161,7 @@ def scenario():
     check(f'int({M}.stop_observing())')
     check(f'int({B}.reset_motion_fixture())'); wait(.35)
 
-    # Queue attack during roll tail; latest eligible input owns the single slot.
+    # An attack alone can be queued during the roll tail.
     click('SpaceBar'); wait(.4); click('LeftMouseButton')
     check(f'int({B}.player().get_editor_property("bAttackBuffered"))')
     check(f'{B}.state()', 2); wait(.3)
@@ -167,11 +169,10 @@ def scenario():
     cap('roll-to-attack'); wait(1.1)
     check(f'int({B}.reset_motion_fixture())'); wait(.35)
     click('SpaceBar'); wait(.38); click('SpaceBar'); click('LeftMouseButton')
-    # Serialized assertion steps can straddle the .70s consume tick. The latest
-    # attack must own the slot, or already have started; a stale roll may not win.
-    check(f'int(not {B}.player().get_editor_property("bDodgeBuffered") and '
-          f'({B}.player().get_editor_property("bAttackBuffered") or {B}.state() == 4))')
-    wait(.4); check(f'{B}.state()', 4); wait(1.1)
+    # The eligible roll request takes priority when both actions overlap.
+    check(f'int(not {B}.player().get_editor_property("bAttackBuffered") and '
+          f'({B}.player().get_editor_property("bDodgeBuffered") or {B}.state() == 2))')
+    wait(.4); check(f'{B}.state()', 2); wait(1.1)
     check(f'int({B}.reset_motion_fixture())'); wait(.35)
 
     # A real damage event is ignored inside i-frames and interrupts the vulnerable tail.

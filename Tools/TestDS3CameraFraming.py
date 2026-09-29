@@ -19,7 +19,10 @@ def setup():
 
 def place(distance):
     p=T.player();b=boss()
-    b.set_actor_location(p.get_actor_location()+p.get_actor_forward_vector()*distance+unreal.Vector(0,0,100),False,False)
+    boss_half=b.get_component_by_class(unreal.CapsuleComponent).get_scaled_capsule_half_height()
+    player_half=p.get_component_by_class(unreal.CapsuleComponent).get_scaled_capsule_half_height()
+    b.set_actor_location(p.get_actor_location()+p.get_actor_forward_vector()*distance+
+                         unreal.Vector(0,0,boss_half-player_half),False,False)
     b.set_actor_rotation(unreal.Rotator(yaw=(p.get_actor_rotation().yaw+180)%360),False)
     return True
 
