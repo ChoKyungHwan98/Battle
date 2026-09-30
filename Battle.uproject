@@ -34,6 +34,10 @@
 		{
 			"Name": "VibeUE",
 			"Enabled": true
+		},
+		{
+			"Name": "BattleBossPlanning",
+			"Enabled": true
 		}
 	]
 }

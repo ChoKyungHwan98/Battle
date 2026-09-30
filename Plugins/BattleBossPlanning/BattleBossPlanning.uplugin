@@ -1,0 +1,16 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "1.0",
+  "FriendlyName": "Battle Boss Planning",
+  "Description": "Small runtime GOAP planner for the Crunch boss positioning layer.",
+  "Category": "Gameplay",
+  "EnabledByDefault": true,
+  "Modules": [
+    {
+      "Name": "BattleBossPlanning",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ]
+}
