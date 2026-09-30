@@ -8,7 +8,7 @@ T = "__import__('TestSwordShield')"
 
 def base(name, locked=False):
     steps = [{'action': 'start_pie'}, {'action': 'wait_for_pie', 'timeout_seconds': 20}]
-    steps.append({'action': 'wait', 'seconds': .2})
+    steps.append({'action': 'wait', 'seconds': .9})
     setup = 'setup_strafe' if locked else 'setup'
     steps.append({'action': 'python_assert_number', 'expression': f'int({T}.{setup}())',
                   'expected': 1, 'operator': 'eq', 'tolerance': 0})
@@ -35,21 +35,21 @@ def check(s, expression, expected=1):
                        'expected': expected, 'operator': 'eq', 'tolerance': 0})
 
 
-def idle_tap():
-    s = base('Space short stationary tap plays backstep')
+def stationary_tap_no_action():
+    s = base('Space short stationary tap does nothing and locomotion stays available')
     short_tap(s)
     wait(s, .08)
-    check(s, f'{T}.state()', 2)
-    check(s, f'int({T}.player().get_editor_property("bIsBackstep"))')
+    check(s, f'{T}.state()', 5)
+    check(s, f'int(not {T}.player().get_editor_property("bIsBackstep"))')
     check(s, f'int(not {T}.player().get_editor_property("bIsSprinting"))')
-    wait(s, .38)
+    wait(s, .7)
+    check(s, f'{T}.state()', 5)
+    key(s, 'W', 'down')
+    wait(s, .3)
     s['steps'].append({'action': 'python_assert_number',
-                       'expression': f'({T}.player().get_actor_location()-{T}.player().get_editor_property("DodgeMoveStartLocation")).length()',
-                       'expected': 20, 'operator': 'gt'})
-    s['steps'].append({'action': 'python_assert_number',
-                       'expression': f'({T}.player().get_actor_location()-{T}.player().get_editor_property("DodgeMoveStartLocation")).length()',
-                       'expected': 75, 'operator': 'lt'})
-    s['steps'].append({'action': 'capture_game', 'name': 'ds3-space-backstep'})
+                       'expression': f'{T}.player().get_velocity().length()',
+                       'expected': 50, 'operator': 'gt'})
+    key(s, 'W', 'up')
     s['steps'].append({'action': 'assert_log', 'not_contains': 'LogScript: Warning'})
     return s
 
@@ -63,6 +63,42 @@ def moving_tap():
     check(s, f'{T}.state()', 2)
     check(s, f'int(not {T}.player().get_editor_property("bIsBackstep"))')
     check(s, f'int(not {T}.player().get_editor_property("bIsSprinting"))')
+    key(s, 'W', 'up')
+    s['steps'].append({'action': 'assert_log', 'not_contains': 'LogScript: Warning'})
+    return s
+
+
+def locked_tap_130ms():
+    s = base('Locked 130ms Space tap rolls and recovers', True)
+    key(s, 'W', 'down')
+    wait(s, .2)
+    key(s, 'SpaceBar', 'down')
+    wait(s, .13)
+    key(s, 'SpaceBar', 'up')
+    wait(s, .28)
+    check(s, f'{T}.state()', 2)
+    check(s, f'int(not {T}.player().get_editor_property("bIsBackstep"))')
+    check(s, f'int({T}.player().get_editor_property("LockOnTarget") is not None)')
+    s['steps'].append({'action': 'python_assert_number',
+                       'expression': f'({T}.player().get_actor_location()-{T}.player().get_editor_property("DodgeMoveStartLocation")).length()',
+                       'expected': 80, 'operator': 'gt'})
+    s['steps'].append({'action': 'capture_game', 'name': 'locked-space-roll'})
+    key(s, 'W', 'up')
+    s['steps'].append({'action': 'assert_log', 'not_contains': 'LogScript: Warning'})
+    return s
+
+
+def locked_roll_recovery():
+    s = base('Locked Space roll returns to locomotion', True)
+    key(s, 'W', 'down')
+    wait(s, .2)
+    short_tap(s)
+    wait(s, 1.15)
+    check(s, f'{T}.state()', 5)
+    check(s, f'int({T}.player().get_editor_property("LockOnTarget") is not None)')
+    s['steps'].append({'action': 'python_assert_number',
+                       'expression': f'{T}.player().get_velocity().length()',
+                       'expected': 50, 'operator': 'gt'})
     key(s, 'W', 'up')
     s['steps'].append({'action': 'assert_log', 'not_contains': 'LogScript: Warning'})
     return s
