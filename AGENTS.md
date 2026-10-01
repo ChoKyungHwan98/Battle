@@ -348,3 +348,4 @@ crash handler — MCP will hang; relaunch); fresh and small → the editor is fi
 - MSVC can mangle this project's Korean path during a VibeUE C++ build; run the prescribed build script through a `subst B:` alias after gracefully closing the editor, then verify `lastBuild.status == succeeded`.
 - A manual `RequestCombatAction` must bind `ObservedPlayer` as well as `ActiveAction`; otherwise the jump slam draws its target but its area damage has no recipient.
 - `WidgetService.set_font` can leave a new TextBlock's `ColorAndOpacity` transparent; copy a known visible SlateColor onto the widget template, compile the Widget Blueprint, and inspect a PIE capture.
+- At Crunch's placed scale 1.3, capsule contact is about 173cm: a 240cm mandatory spacing gate plus 240cm attack minima can cause endless retreat under pressure. Keep a close-range attack candidate when tuning spacing, and verify selection and actual contact in PIE.
