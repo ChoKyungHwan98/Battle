@@ -179,3 +179,54 @@ def single_scenario(index,distance,duration,expected_health=None):
     return {'name':f'Measure boss action {index} at {distance}cm',
       'steps':steps,
       'teardown':{'stop_pie':True}}
+
+
+late_punch_state={}
+late_punch_observer=None
+
+
+def begin_late_body_punch():
+    """Move into the punch only after its physical strike window has closed."""
+    global late_punch_state,late_punch_observer
+    T.setup(300)
+    b,p=T.boss(),T.player()
+    mesh=b.get_component_by_class(unreal.SkeletalMeshComponent)
+    montage=b.get_editor_property('Actions')[1].get_editor_property('Montage')
+    late_punch_state={'moved':False,'health_at_move':None,'open_at_move':None}
+    def tick(delta):
+        position=mesh.get_anim_instance().montage_get_position(montage)
+        if not late_punch_state['moved'] and position>=0.62:
+            boss_half=b.get_component_by_class(unreal.CapsuleComponent).get_scaled_capsule_half_height()
+            player_half=p.get_component_by_class(unreal.CapsuleComponent).get_scaled_capsule_half_height()
+            b.set_actor_location(p.get_actor_location()+unreal.Vector(173,0,boss_half-player_half),False,False)
+            late_punch_state.update(moved=True,health_at_move=p.get_editor_property('CurrentHealth'),
+                                    open_at_move=bool(b.get_editor_property('bPhysicalStrikeOpen')),
+                                    montage_position=position)
+    late_punch_observer=unreal.register_slate_post_tick_callback(tick)
+    b.call_method('RequestCombatAction',(1,))
+    b.set_actor_tick_enabled(True)
+    return int(b.get_editor_property('ActiveAction')==b.get_editor_property('Actions')[1])
+
+
+def late_body_punch_result():
+    global late_punch_observer
+    if late_punch_observer is not None:
+        unreal.unregister_slate_post_tick_callback(late_punch_observer)
+        late_punch_observer=None
+    print('LATE_PUNCH',late_punch_state,'HEALTH',T.player().get_editor_property('CurrentHealth'))
+    return int(late_punch_state.get('moved') and
+               late_punch_state.get('health_at_move')==2000 and
+               late_punch_state.get('open_at_move') is False and
+               T.player().get_editor_property('CurrentHealth')==2000)
+
+
+def late_body_punch_scenario():
+    name="__import__('TestBossRealContact')"
+    return {'name':'Body punch causes no damage when target enters after strike window',
+      'steps':[{'action':'start_pie'},{'action':'wait_for_pie','timeout_seconds':20},
+       {'action':'python_assert_number','expression':f'{name}.begin_late_body_punch()',
+        'expected':1,'operator':'eq'},
+       {'action':'wait','seconds':1.75},
+       {'action':'python_assert_number','expression':f'{name}.late_body_punch_result()',
+        'expected':1,'operator':'eq'}],
+      'teardown':{'stop_pie':True}}
