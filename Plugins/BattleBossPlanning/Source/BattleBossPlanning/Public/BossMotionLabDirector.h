@@ -7,6 +7,7 @@
 
 class UAnimSequence;
 class UTextBlock;
+class UVerticalBox;
 class UDamageType;
 class AController;
 
@@ -18,10 +19,13 @@ class BATTLEBOSSPLANNING_API UBossMotionLabOverlay : public UUserWidget
 public:
     virtual TSharedRef<SWidget> RebuildWidget() override;
     void SetDisplayText(const FString& Value);
+    void SetShowControls(bool bShow);
 
 private:
     UPROPERTY(Transient)
     TObjectPtr<UTextBlock> DisplayText;
+    UPROPERTY(Transient)
+    TObjectPtr<UTextBlock> ControlsText;
 };
 
 /** Manual motion and contact fixture for Lvl_BossMotionLab. Never used by the fight map. */
@@ -46,10 +50,18 @@ private:
     int32 ClipIndex = 0;
     int32 DistanceIndex = 1;
     bool bShowHitboxes = true;
+    bool bShowControls = false;
     bool bInitialized = false;
     bool bInputBound = false;
     bool bManualActionActive = false;
     float ManualActionStartTime = 0.f;
+    int32 ManualActionIndex = INDEX_NONE;
+    float FirstHandContactAt = -1.f;
+    float FirstWindowOpenAt = -1.f;
+    float LastHandContactAt = -1.f;
+    float ClosestHandGap = BIG_NUMBER;
+    float ClosestHandGapAt = -1.f;
+    float LastContactSampleAt = -1.f;
     int32 DamageEventCount = 0;
     float DamageTotal = 0.f;
     UPROPERTY(Transient)
@@ -79,6 +91,8 @@ private:
     void StartChain(int32 Index);
     void AdvanceChain();
     void ToggleHitboxes();
+    void ToggleControls();
+    void SampleHandContact();
     void DrawDiagnostics() const;
     void DrawOverlay() const;
     void StopCurrentMotion() const;
