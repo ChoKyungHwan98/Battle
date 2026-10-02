@@ -1299,11 +1299,37 @@ bool UAnimMontageService::SetNotifyTriggerTime(
 	if (NotifyIndex < 0 || NotifyIndex >= Montage->Notifies.Num()) return false;
 
 	if (NewTime < 0.0f || NewTime > Montage->GetPlayLength()) return false;
+	FAnimNotifyEvent& Notify = Montage->Notifies[NotifyIndex];
+	const float Duration = Notify.NotifyStateClass ? Notify.GetDuration() : 0.0f;
+	if (NewTime + Duration > Montage->GetPlayLength()) return false;
 
 	Montage->Modify();
-	Montage->Notifies[NotifyIndex].Link(Montage, NewTime);
+	Notify.Link(Montage, NewTime);
+	if (Notify.NotifyStateClass)
+	{
+		Notify.SetDuration(Duration);
+	}
 	MarkMontageModified(Montage);
 
+	return true;
+}
+
+bool UAnimMontageService::SetNotifyDuration(
+	const FString& MontagePath,
+	int32 NotifyIndex,
+	float NewDuration)
+{
+	UAnimMontage* Montage = LoadMontage(MontagePath);
+	if (!Montage || NotifyIndex < 0 || NotifyIndex >= Montage->Notifies.Num()) return false;
+
+	FAnimNotifyEvent& Notify = Montage->Notifies[NotifyIndex];
+	if (!Notify.NotifyStateClass || NewDuration <= 0.0f ||
+		Notify.GetTime() + NewDuration > Montage->GetPlayLength()) return false;
+
+	CloseMontageEditorForSafeEdit(Montage);
+	Montage->Modify();
+	Notify.SetDuration(NewDuration);
+	MarkMontageModified(Montage);
 	return true;
 }
 

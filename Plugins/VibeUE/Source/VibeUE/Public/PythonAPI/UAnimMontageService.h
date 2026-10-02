@@ -947,6 +947,13 @@ public:
 		int32 NotifyIndex,
 		float NewTime);
 
+	/** Set the duration of an existing notify state without replacing it. */
+	UFUNCTION(BlueprintCallable, meta = (AICallable), Category = "VibeUE|Animation|Montage|Notifies")
+	static bool SetNotifyDuration(
+		const FString& MontagePath,
+		int32 NotifyIndex,
+		float NewDuration);
+
 	/**
 	 * Link a notify to a specific section.
 	 *
