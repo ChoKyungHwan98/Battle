@@ -13,8 +13,8 @@
 
 | 시퀀스 | 현재 보스 연결 | 검토 메모 |
 | --- | --- | --- |
-| `Ability_Combo_01_Slow` / `Ability_Combo_01_Recovery` | 실제 1번 공격과 연계 첫 타격에 사용 | 1번 공격은 원본을 복제해 상체를 아래로 조정한 `Ability_Combo_01_Slow_Low` 뒤에 Recovery를 붙였다. 원본은 보존했다. |
-| `Ability_Combo_02_Slow` / `Ability_Combo_02_Recovery` | 실제 2번 공격에 사용 | 빠른 왼손 타격과 Recovery를 이어 붙이고 판정 소켓도 왼손으로 맞췄다. |
+| `Ability_Combo_01_Slow` / `Ability_Combo_01_Recovery` | 실제 1번 공격과 연계 첫 타격에 사용 | 상체를 낮춘 복제본 `Ability_Combo_01_Slow_Low_Windup` 뒤에 Recovery를 붙였다. 연계 첫 잽도 같은 준비 동작을 쓴다. 원본은 보존했다. |
+| `Ability_Combo_02_Slow` / `Ability_Combo_02_Recovery` | 실제 2번 공격과 연계 둘째 타격에 사용 | `Ability_Combo_02_Slow_Windup`을 사용하며 실제 타격 손과 판정 소켓은 오른손이다. 연계에서는 후속 훅으로 가는 브리지를 유지한다. |
 | `Ability_DashingCross_Start` / `Ability_DashingCross` / `Ability_Dashing_Recovery_Hit` | 실제 슈퍼맨 펀치에 사용 | 원본 Start의 끝 자세가 본 공격 첫 자세와 크게 달라, 복제한 `Ability_DashingCross_Start_Bridged`의 마지막 6프레임을 연결 자세로 다듬었다. 시작 → 본 공격 → 적중 시 Hit Recovery, 실패 시 일반 Recovery로 분기한다. |
 
 ## 사용자 조사 기록
