@@ -155,7 +155,7 @@ Travelmode_*                                    비전투 이동
 
 ### 점프
 
-`Jump_Start`(0.233) → `Jump_Apex`(0.333) → `Jump_PreLand` → `Jump_Land`(1.7)
+현재 점프 내려찍기 몽타주: `Jump_Start`(0.359초) → `Jump_Apex`(1.481초) → `Jump_PreLand`(0.556초) → `Jump_Land`(1.7초) → `Stunned_Start` → `Stunned_Loop`. 착지는 시작 약 2.396초다. 원본 `Ability_Attack_Air`는 이 점프 연속 동작과 양 끝 자세가 맞지 않아 몽타주에서 제외했다. 원본 시퀀스 자체는 유지한다.
 
 ### 블렌드스페이스 (기성품 9개)
 
