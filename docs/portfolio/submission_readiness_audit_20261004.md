@@ -49,6 +49,7 @@
 ## 주요 근거
 
 - [현재 판단·이동 설계](crunch_combat_ai_v2_design.md)
+- [Utility·GOAP·미사용 모션과 패턴 다양화 점검](crunch_utility_goap_pattern_audit_20261005.md)
 - [전투 AI 기준](../../Boss_AI_HFSM_Utility_GOAP_Design.md)
 - [모션 실험실과 접촉 기록](../reference/boss_motion_lab.md)
 - [접촉 정렬 시험](../reference/boss_contact_alignment_audit_20261001.md)
