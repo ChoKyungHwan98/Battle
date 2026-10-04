@@ -102,7 +102,9 @@ FBossPositionPlan UBossPositionPlanner::PlanPosition(
     bool bRightPathOpen,
     float MoveSpeed,
     float LeftExposure,
-    float RightExposure)
+    float RightExposure,
+    float AttackMinRange,
+    float GuardBreakMinRange)
 {
     FBossPositionPlan Result;
     Result.Goal = bGuardPressureReady && bGuardRecentlySeen
@@ -111,13 +113,15 @@ FBossPositionPlan UBossPositionPlanner::PlanPosition(
 
     const float SafeAttackRange = FMath::Max(AttackRange, 1.f);
     const float SafeGuardRange = FMath::Max(GuardBreakRange, 1.f);
+    const float SafeAttackMin = FMath::Clamp(AttackMinRange, 0.f, SafeAttackRange);
+    const float SafeGuardMin = FMath::Clamp(GuardBreakMinRange, 0.f, SafeGuardRange);
     const float SafeSpeed = FMath::Max(MoveSpeed, 1.f);
     uint8 StartFacts = 0;
-    if (Distance <= SafeAttackRange)
+    if (Distance >= SafeAttackMin && Distance <= SafeAttackRange)
     {
         StartFacts |= InMeleeRange;
     }
-    if (Distance <= SafeGuardRange)
+    if (Distance >= SafeGuardMin && Distance <= SafeGuardRange)
     {
         StartFacts |= InGuardBreakRange;
     }
@@ -132,9 +136,21 @@ FBossPositionPlan UBossPositionPlanner::PlanPosition(
             ? InMeleeRange | FacingTarget | ProbeDone
             : InMeleeRange | FacingTarget);
 
-    const float ApproachTravel = FMath::Max(0.f, Distance - FMath::Min(SafeAttackRange, SafeGuardRange)) / SafeSpeed;
+    const float ApproachTargetRange = Result.Goal == EBossPositionGoal::PrepareGuardBreak
+        ? SafeGuardRange : SafeAttackRange;
+    const bool bCanApproach = Distance > ApproachTargetRange;
+    uint8 ApproachResultFacts = 0;
+    if (ApproachTargetRange >= SafeAttackMin && ApproachTargetRange <= SafeAttackRange)
+    {
+        ApproachResultFacts |= InMeleeRange;
+    }
+    if (ApproachTargetRange >= SafeGuardMin && ApproachTargetRange <= SafeGuardRange)
+    {
+        ApproachResultFacts |= InGuardBreakRange;
+    }
+    const float ApproachTravel = FMath::Max(0.f, Distance - ApproachTargetRange) / SafeSpeed;
     const FActionDefinition Actions[] = {
-        { EBossPositionAction::DirectApproach, 0, uint8(InMeleeRange | InGuardBreakRange), true,
+        { EBossPositionAction::DirectApproach, 0, ApproachResultFacts, bCanApproach,
             { 0.f, ApproachTravel + 0.1f, 0.2f } },
         { EBossPositionAction::FaceTarget, 0, FacingTarget, true,
             { 0.f, 0.25f, 0.f } },

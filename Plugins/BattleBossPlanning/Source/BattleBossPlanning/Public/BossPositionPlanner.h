@@ -77,5 +77,7 @@ public:
         bool bRightPathOpen,
         float MoveSpeed,
         float LeftExposure,
-        float RightExposure);
+        float RightExposure,
+        float AttackMinRange,
+        float GuardBreakMinRange);
 };
