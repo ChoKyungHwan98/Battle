@@ -110,6 +110,8 @@ def summarize(records):
         'longest_identical_choice_streak':longest, 'events':dict(events),
         'actual_attack_starts_by_slot':dict(Counter(r.get('slot','?') for r in boss
             if r.get('event')=='state' and r.get('state','').endswith('.Windup'))),
+        'actual_attack_starts_by_pattern':dict(Counter(r.get('choice','?') for r in boss
+            if r.get('event')=='state' and r.get('state','').endswith('.Windup'))),
         'sampled_state_seconds':{k:round(v,2) for k,v in sampled_state_seconds.items()},
         'candidate_rows':len(candidates),
         'zero_score_reasons':dict(Counter(r.get('reason','?') for r in candidates
@@ -134,6 +136,7 @@ def markdown(summary, records, source, session, total):
         lines.append(f'- {label}: {count}번 선택')
     lines += [f'- 같은 선택의 최장 연속: {summary["longest_identical_choice_streak"]}회',
               '- 실제 공격 준비 진입(슬롯별): '+json.dumps(summary['actual_attack_starts_by_slot'],ensure_ascii=False),
+              '- 실제 시작한 패턴: '+json.dumps(summary['actual_attack_starts_by_pattern'],ensure_ascii=False),
               '', '## 판정과 회피', '',
               f'- 팔 접촉 전달: {summary["events"].get("contact_submitted",0)}회',
               f'- 관찰한 플레이어 HP 감소: {summary["player_hp_lost_observed"]}',
