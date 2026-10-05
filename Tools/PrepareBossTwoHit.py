@@ -1,7 +1,7 @@
 """Prepare a separate two-hit pattern through Unreal MCP, without running PIE.
 
-The card stays disabled and outside the live action array until link eligibility,
-candidate evaluation, cooldown storage, and MotionLab controls are integrated.
+New cards start disabled and outside the live action array. IntegrateBossTwoHit
+connects link eligibility, candidate evaluation and cooldown storage before enabling.
 Never overwrite an existing edited draft on re-run: verify it instead.
 """
 import json
@@ -67,7 +67,9 @@ def prepare():
         assert E.save_loaded_asset(card)
     card = E.load_asset(CARD)
     actual_segments, actual_notifies = segments(MONTAGE), notifies(MONTAGE)
-    assert len(actual_segments) == 5 and len(actual_notifies) == 6
+    sections = list(M.list_sections(MONTAGE))
+    abort = next((s for s in sections if s.section_name == 'AbortLeftRecovery'), None)
+    assert len(actual_segments) == (6 if abort else 5) and len(actual_notifies) == 6
     assert actual_segments[:4] == source_segments[:4], 'First two strikes and join must remain unchanged'
     assert actual_notifies == source_notifies[:6], 'First two hand, step and FX timings must remain unchanged'
     assert segments(SOURCE) == source_segments and notifies(SOURCE) == source_notifies
@@ -75,24 +77,29 @@ def prepare():
     assert list(card.get_editor_property('ImpactTimes')) == source_impacts[:2]
     assert list(card.get_editor_property('HitWindowEnds')) == source_ends[:2]
     assert len(card.get_editor_property('HitSockets')) == len(card.get_editor_property('HitDamages')) == 2
-    assert not card.get_editor_property('bEnabled')
     boss = unreal.get_default_object(E.load_asset('/Game/BossArena/Boss/Blueprints/BP_Boss_Crunch').generated_class())
-    assert card not in boss.get_editor_property('Actions'), 'Draft must not be selected before link integration'
+    integrated = card in boss.get_editor_property('Actions')
+    assert bool(card.get_editor_property('bEnabled')) == integrated
+    if integrated:
+        assert abort and all(s.next_section_name == 'None' for s in sections)
+        assert len(boss.get_editor_property('CooldownUntil')) >= len(boss.get_editor_property('Actions'))
     total = card.get_editor_property('TotalSeconds')
     final_recovery = total - source_impacts[1] - card.get_editor_property('ActiveSeconds')
     assert .6 <= final_recovery < 1.0
     assert all(n[1] + n[2] <= M.get_montage_length(MONTAGE) for n in actual_notifies)
-    report = {'status': 'prepared_not_integrated', 'pie_run': False,
+    normal_end = abort.start_time if abort else M.get_montage_length(MONTAGE)
+    assert abs(total - (normal_end / .75 + .25)) < .001
+    report = {'status': 'integrated' if integrated else 'prepared_not_integrated', 'pie_run': False,
               'montage': MONTAGE, 'card': CARD, 'total_seconds': total,
               'final_recovery_timer_seconds': final_recovery,
               'segments': actual_segments, 'notifies': actual_notifies,
               'checks': ['first two source strikes preserved', 'first six notifies preserved',
                          'third strike removed only from duplicate', 'two damage entries',
-                         'source pattern unchanged', 'draft excluded from live choice',
+                         'source pattern unchanged', 'enabled flag matches live membership',
                          'final recovery between 0.6 and 1.0 seconds'],
-              'remaining': ['link eligibility', 'Utility and cooldown array integration',
-                            'MotionLab request and HUD', 'user gameplay evaluation']}
+              'remaining': ['user gameplay evaluation'] if integrated else
+                           ['link eligibility', 'Utility and cooldown array integration', 'MotionLab request and HUD', 'user gameplay evaluation']}
     path = Path(unreal.Paths.project_dir()) / 'Saved/VibeUE/Reports/crunch_two_hit_prepared.json'
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
-    print('VERIFIED draft', str(path), 'final recovery', final_recovery)
+    print('VERIFIED', report['status'], str(path), 'final recovery', final_recovery)
     return report

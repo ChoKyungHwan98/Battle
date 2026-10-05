@@ -10,6 +10,10 @@
 #include "NavigationSystem.h"
 #include "UObject/StructOnScope.h"
 #include "UObject/UnrealType.h"
+#include "Animation/AnimInstance.h"
+#include "Animation/AnimMontage.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Kismet/KismetSystemLibrary.h"
 
 namespace
 {
@@ -313,25 +317,133 @@ float UBossCombatIntentLibrary::AdjustIntentCandidate(AActor* Boss, int32 Candid
 {
     if (!IsValid(Boss) || Score <= 0.f) return 0.f;
     if (const auto* Intent = Boss->FindComponentByClass<UBossCombatIntentComponent>()) Score *= Intent->FailureMultiplier(CandidateSlot);
-    // Existing candidate order evaluates ordinary attacks before the approach card.
-    // Only already-positive scores suppress movement: disabled/observationally
-    // unavailable attacks must never strand the boss with no eligible action.
-    const float Distance = Number(Boss, TEXT("UtilityDistance"));
-    if (CandidateSlot == 7 && Distance <= 650.f)
-    {
-        const FArrayProperty* P = FindFProperty<FArrayProperty>(Boss->GetClass(), TEXT("ActionWeights"));
-        if (P) if (const FNumericProperty* Element = CastField<FNumericProperty>(P->Inner))
-        {
-            FScriptArrayHelper Values(P, P->ContainerPtrToValuePtr<void>(Boss));
-            for (int32 I = 0; I < Values.Num(); ++I)
-                if (I != 7 && Element->GetFloatingPointPropertyValue(Values.GetRawPtr(I)) > 0.0) return 0.f;
-        }
-    }
     return Score;
+}
+
+namespace
+{
+double FinalizeWeights(TArray<double>& Weights, const TArray<bool>& IsApproach, bool bWithinEntryRange)
+{
+    bool bHasAttack = false;
+    for (int32 I = 0; I < Weights.Num(); ++I)
+        if (IsApproach.IsValidIndex(I) && !IsApproach[I] && Weights[I] > 0.0) bHasAttack = true;
+    double Total = 0;
+    for (int32 I = 0; I < Weights.Num(); ++I)
+    {
+        if (bWithinEntryRange && bHasAttack && IsApproach.IsValidIndex(I) && IsApproach[I]) Weights[I] = 0;
+        Total += Weights[I];
+    }
+    return Total;
+}
+
+bool CanLinkTwoHit(float Distance, float Dot, float Min, float Max, bool bTargetAvailable)
+{
+    // A link is permission to prepare the next strike, not permission to hit.
+    // Allow 40cm for the existing second step; do not expand the hand trace.
+    return bTargetAvailable && FMath::IsFinite(Distance) && FMath::IsFinite(Dot)
+        && Distance >= Min && Distance <= Max + 40.f && Dot >= 0.f;
+}
+}
+
+void UBossCombatIntentLibrary::EnsureActionCooldownCapacity(AActor* Boss)
+{
+    if (!IsValid(Boss)) return;
+    const FArrayProperty* Actions = FindFProperty<FArrayProperty>(Boss->GetClass(), TEXT("Actions"));
+    const FArrayProperty* Cooldowns = FindFProperty<FArrayProperty>(Boss->GetClass(), TEXT("CooldownUntil"));
+    if (!Actions || !Cooldowns) return;
+    FScriptArrayHelper ActionValues(Actions, Actions->ContainerPtrToValuePtr<void>(Boss));
+    FScriptArrayHelper CooldownValues(Cooldowns, Cooldowns->ContainerPtrToValuePtr<void>(Boss));
+    if (CooldownValues.Num() < ActionValues.Num()) CooldownValues.Resize(ActionValues.Num());
+}
+
+void UBossCombatIntentLibrary::FinalizeIntentScores(AActor* Boss)
+{
+    if (!IsValid(Boss)) return;
+    const FArrayProperty* Scores = FindFProperty<FArrayProperty>(Boss->GetClass(), TEXT("ActionWeights"));
+    const FArrayProperty* Actions = FindFProperty<FArrayProperty>(Boss->GetClass(), TEXT("Actions"));
+    if (!Scores || !Actions) return;
+    const FNumericProperty* ScoreType = CastField<FNumericProperty>(Scores->Inner);
+    const FObjectPropertyBase* ActionType = CastField<FObjectPropertyBase>(Actions->Inner);
+    if (!ScoreType || !ScoreType->IsFloatingPoint() || !ActionType) return;
+    FScriptArrayHelper Values(Scores, Scores->ContainerPtrToValuePtr<void>(Boss));
+    FScriptArrayHelper Cards(Actions, Actions->ContainerPtrToValuePtr<void>(Boss));
+    if (Values.Num() != Cards.Num()) return;
+    TArray<double> Weights;
+    TArray<bool> Approach;
+    for (int32 I = 0; I < Values.Num(); ++I)
+    {
+        Weights.Add(ScoreType->GetFloatingPointPropertyValue(Values.GetRawPtr(I)));
+        Approach.Add(Number(ActionType->GetObjectPropertyValue(Cards.GetRawPtr(I)), TEXT("ActionId"), -1) == 7);
+    }
+    const double Total = FinalizeWeights(Weights, Approach,
+        Number(Boss, TEXT("UtilityDistance")) <= Number(Boss, TEXT("IntentSelectionMaxDistance"), 650));
+    FString Summary;
+    for (int32 I = 0; I < Values.Num(); ++I)
+    {
+        ScoreType->SetFloatingPointPropertyValue(Values.GetRawPtr(I), Weights[I]);
+        Summary += FString::Printf(TEXT("%s%d:%.2f"), I == 0 ? TEXT("") : TEXT(","), I, Weights[I]);
+    }
+    SetNumber(Boss, TEXT("UtilityTotalScore"), Total);
+    SetText(Boss, TEXT("IntentFinalScores"), Summary);
+    // Per-candidate rows are before this pass; final weights are recorded separately.
+    Invoke(Boss, TEXT("RecordCombatQA"), TEXT("intent_scores_finalized"));
+}
+
+bool UBossCombatIntentLibrary::ContinueTwoHitOrRecover(AActor* Boss)
+{
+    if (!IsValid(Boss)) return false;
+    UObject* Action = Object(Boss, TEXT("ActiveAction"));
+    if (Number(Action, TEXT("ActionId"), -1) != 9) return true;
+    if (!StateIs(Boss, TEXT("Boss.Combat.Attack.Active")) || Number(Boss, TEXT("HitIndex")) != 0) return false;
+    AActor* Target = Cast<AActor>(Object(Boss, TEXT("ObservedPlayer")));
+    const bool bTargetAvailable = IsValid(Target) && Number(Target, TEXT("CurrentHealth")) > 0
+        && !Flag(Target, TEXT("bKnockedDown"));
+    const FVector Delta = IsValid(Target) ? Target->GetActorLocation() - Boss->GetActorLocation() : FVector::ZeroVector;
+    if (CanLinkTwoHit(Delta.Size2D(), FVector::DotProduct(Boss->GetActorForwardVector(), Delta.GetSafeNormal2D()),
+        Number(Action, TEXT("MinDistance")), Number(Action, TEXT("MaxDistance")), bTargetAvailable))
+    {
+        Invoke(Boss, TEXT("RecordCombatQA"), TEXT("two_hit_link_accepted"));
+        return true;
+    }
+    if (!TransitionState(Boss, TEXT("Boss.Combat.Attack.Active"), TEXT("Boss.Combat.Attack.Recovery"), TEXT("2연타 연결 거리·방향 이탈: 왼손 회수"))) return false;
+    UKismetSystemLibrary::K2_ClearTimer(Boss, TEXT("OpenActionImpact"));
+    SetFlag(Boss, TEXT("bAttackStepActive"), false);
+    SetFlag(Boss, TEXT("bPhysicalStrikeOpen"), false);
+    Invoke(Boss, TEXT("StopBossLocomotion"));
+    if (ACharacter* Character = Cast<ACharacter>(Boss))
+        if (UAnimInstance* Anim = Character->GetMesh()->GetAnimInstance())
+            if (UAnimMontage* Montage = Cast<UAnimMontage>(Object(Action, TEXT("Montage"))))
+                if (Anim->Montage_IsPlaying(Montage) && Montage->GetSectionIndex(TEXT("AbortLeftRecovery")) != INDEX_NONE)
+                    Anim->Montage_JumpToSection(TEXT("AbortLeftRecovery"), Montage);
+    UKismetSystemLibrary::K2_SetTimer(Boss, TEXT("FinishCombatAction"), .85f, false);
+    SetText(Boss, TEXT("IntentReason"), TEXT("다음 주먹 범위 이탈: 0.85초 회수 후 재판단"));
+    Invoke(Boss, TEXT("RecordCombatQA"), TEXT("two_hit_link_aborted"));
+    return false;
 }
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossIntentChoiceTest, "Battle.GOAP.IntentChoiceAndLink",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBossIntentChoiceTest::RunTest(const FString& Parameters)
+{
+    TArray<double> LaterAttack{0, 88, 20};
+    TestEqual(TEXT("Later attack suppresses earlier approach"), FinalizeWeights(LaterAttack, {false,true,false}, true), 20.0);
+    TestEqual(TEXT("Approach removed after all candidates"), LaterAttack[1], 0.0);
+    TArray<double> EarlierAttack{20,88,0};
+    TestEqual(TEXT("Candidate order does not change total"), FinalizeWeights(EarlierAttack, {false,true,false}, true), 20.0);
+    TArray<double> NoAttack{0,88,0};
+    TestEqual(TEXT("Unavailable attacks preserve approach"), FinalizeWeights(NoAttack, {false,true,false}, true), 88.0);
+    TArray<double> Far{20,88,0};
+    TestEqual(TEXT("Long distance keeps approach"), FinalizeWeights(Far, {false,true,false}, false), 108.0);
+    TestTrue(TEXT("Valid front link"), CanLinkTwoHit(285, 1, 0, 285, true));
+    TestTrue(TEXT("Existing step allowance boundary"), CanLinkTwoHit(325, 0, 0, 285, true));
+    TestFalse(TEXT("Too far aborts"), CanLinkTwoHit(326, 1, 0, 285, true));
+    TestFalse(TEXT("Behind aborts"), CanLinkTwoHit(200, -.01f, 0, 285, true));
+    TestFalse(TEXT("Unavailable target aborts"), CanLinkTwoHit(200, 1, 0, 285, false));
+    TestFalse(TEXT("Inside minimum aborts"), CanLinkTwoHit(100, 1, 150, 285, true));
+    return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossIntentTransitionParametersTest, "Battle.GOAP.IntentTransitionParameters",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FBossIntentTransitionParametersTest::RunTest(const FString& Parameters)

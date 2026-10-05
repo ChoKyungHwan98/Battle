@@ -138,6 +138,7 @@ TSharedRef<SWidget> UBossMotionLabOverlay::RebuildWidget()
         TEXT("\n실전 행동  1 잽 · 2 후속 타격 · 3 어퍼컷\n")
         TEXT("               4 휩쓸기 · 5 연계 · 6 가드 크래시\n")
         TEXT("               7 슈퍼맨 · 8 접근 · 9 점프\n")
+        TEXT("               0 왼손 → 오른손 2연타\n")
         TEXT("거리 설정  Z 170 · X 230 · V 380 · B 700 cm\n")
         TEXT("모션 비교  [ / ] 탐색 · O 미리보기 · C 전체 목록\n")
         TEXT("연결 비교  T/Y 콤보 회복 · U/I 대시 적중/실패\n")
@@ -200,7 +201,7 @@ void ABossMotionLabDirector::BindInput()
     Key(EKeys::H, &ABossMotionLabDirector::ToggleHitboxes);
     Key(EKeys::Tab, &ABossMotionLabDirector::ToggleControls);
     for (const FKey K : {EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five,
-        EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine})
+        EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine, EKeys::Zero})
         InputComponent->BindKey(K, Press, this, &ABossMotionLabDirector::OnNumberKey);
     for (const FKey K : {EKeys::Z, EKeys::X, EKeys::V, EKeys::B, EKeys::T, EKeys::Y, EKeys::U, EKeys::I})
         InputComponent->BindKey(K, Press, this, &ABossMotionLabDirector::OnFunctionKey);
@@ -209,7 +210,7 @@ void ABossMotionLabDirector::BindInput()
 void ABossMotionLabDirector::OnNumberKey(FKey Key)
 {
     const FKey Keys[] = {EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five,
-        EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine};
+        EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine, EKeys::Zero};
     for (int32 Index = 0; Index < UE_ARRAY_COUNT(Keys); ++Index)
         if (Key == Keys[Index]) { RequestAction(Index); return; }
 }
@@ -378,6 +379,13 @@ void ABossMotionLabDirector::SetDistance(int32 Index)
 void ABossMotionLabDirector::RequestAction(int32 Index)
 {
     if (!bInitialized || !IsValid(BossActor)) return;
+    const FStructProperty* StateProperty = FindFProperty<FStructProperty>(BossActor->GetClass(), TEXT("BossState"));
+    const FGameplayTag* State = StateProperty ? StateProperty->ContainerPtrToValuePtr<FGameplayTag>(BossActor) : nullptr;
+    if (!State || !State->MatchesTagExact(FGameplayTag::RequestGameplayTag(TEXT("Boss.Combat.Ready"))))
+    {
+        LastResult = TEXT("요청 거부 · 현재 행동이 끝난 뒤 다시 누르세요");
+        return;
+    }
     Chain.Reset();
     SuppressAutonomousChoice();
     DamageEventCount = 0;
@@ -396,14 +404,31 @@ void ABossMotionLabDirector::RequestAction(int32 Index)
         Followup->SetPropertyValue_InContainer(BossActor, true);
     if (UFunction* Fn = BossActor->FindFunction(TEXT("RequestCombatAction")))
     {
+        if (FBoolProperty* Allowed = FindFProperty<FBoolProperty>(BossActor->GetClass(), TEXT("bActionStartAllowed")))
+            Allowed->SetPropertyValue_InContainer(BossActor, false);
+        if (FStrProperty* Reason = FindFProperty<FStrProperty>(BossActor->GetClass(), TEXT("ActionStartReason")))
+            Reason->SetPropertyValue_InContainer(BossActor, TEXT("선택한 번호는 실전 공격 요청 대상이 아님"));
         FStructOnScope Params(Fn);
         for (TFieldIterator<FProperty> It(Fn); It; ++It)
             if ((*It)->HasAnyPropertyFlags(CPF_Parm) && !(*It)->HasAnyPropertyFlags(CPF_ReturnParm))
                 if (FIntProperty* Int = CastField<FIntProperty>(*It)) { Int->SetPropertyValue_InContainer(Params.GetStructMemory(), Index); break; }
         BossActor->ProcessEvent(Fn, Params.GetStructMemory());
-        LastResult = FString::Printf(TEXT("%d번 실전 행동 실행 중"), Index + 1);
+        if (ReadBool(BossActor, TEXT("bActionStartAllowed")))
+            LastResult = FString::Printf(TEXT("%d키 실전 행동 실행 중"), (Index + 1) % 10);
+        else
+        {
+            const FStrProperty* Reason = FindFProperty<FStrProperty>(BossActor->GetClass(), TEXT("ActionStartReason"));
+            LastResult = TEXT("요청 거부 · ") + (Reason ? Reason->GetPropertyValue_InContainer(BossActor) : TEXT("시작 조건 불충족"));
+            bManualActionActive = false;
+            BossActor->SetActorTickEnabled(false);
+        }
     }
-    else LastResult = TEXT("실전 행동 요청 함수를 찾지 못함");
+    else
+    {
+        LastResult = TEXT("실전 행동 요청 함수를 찾지 못함");
+        bManualActionActive = false;
+        BossActor->SetActorTickEnabled(false);
+    }
 }
 
 void ABossMotionLabDirector::PreviousClip()
@@ -543,9 +568,9 @@ void ABossMotionLabDirector::DrawOverlay() const
     if (!GEngine) return;
     const FString Clip = CurrentClips && CurrentClips->IsValidIndex(ClipIndex) ? (*CurrentClips)[ClipIndex].GetAssetName() : TEXT("none");
     const TCHAR* Names[] = { TEXT("왼손 잽"), TEXT("후속 타격"), TEXT("어퍼컷"), TEXT("양손 휩쓸기"),
-        TEXT("잽·잽·훅"), TEXT("가드 크래시"), TEXT("슈퍼맨 펀치"), TEXT("접근"), TEXT("점프 내려찍기") };
+        TEXT("잽·잽·훅"), TEXT("가드 크래시"), TEXT("슈퍼맨 펀치"), TEXT("접근"), TEXT("점프 내려찍기"), TEXT("왼손 → 오른손 2연타") };
     const FString Action = ManualActionIndex >= 0 && ManualActionIndex < UE_ARRAY_COUNT(Names) ?
-        FString::Printf(TEXT("%d  %s"), ManualActionIndex + 1, Names[ManualActionIndex]) : TEXT("행동 선택 대기");
+        FString::Printf(TEXT("%d키  %s"), (ManualActionIndex + 1) % 10, Names[ManualActionIndex]) : TEXT("행동 선택 대기");
     const FString Contact = FirstHandContactAt >= 0.f ?
         FString::Printf(TEXT("%.2f초"), FirstHandContactAt) : TEXT("없음");
     const FString Window = FirstWindowOpenAt >= 0.f ?

@@ -45,4 +45,9 @@ public:
     UFUNCTION(BlueprintCallable, Category="Boss|Intent") static void BeginSelectedAttackIntent(AActor* Boss);
     UFUNCTION(BlueprintPure, Category="Boss|Intent") static bool IsAttackIntentActive(AActor* Boss);
     UFUNCTION(BlueprintPure, Category="Boss|Intent") static float AdjustIntentCandidate(AActor* Boss, int32 Slot, float Score);
+    /** Called after every candidate has been scored, before the weighted draw. */
+    UFUNCTION(BlueprintCallable, Category="Boss|Intent") static void FinalizeIntentScores(AActor* Boss);
+    UFUNCTION(BlueprintCallable, Category="Boss|Intent") static void EnsureActionCooldownCapacity(AActor* Boss);
+    /** False means the two-hit pattern has entered its abort recovery. Other patterns pass through. */
+    UFUNCTION(BlueprintCallable, Category="Boss|Intent") static bool ContinueTwoHitOrRecover(AActor* Boss);
 };
