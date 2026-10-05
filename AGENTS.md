@@ -1,5 +1,7 @@
 # Battle workspace
 
+- Native calls to Crunch's `TransitionBossState` must bind `ExpectedState` to the source state and `NewState` to the destination by parameter name; filling every GameplayTag parameter with the destination rejects the transition. Check the resulting BossState before advancing. For C++ automation, use AutomationTestToolset DiscoverTests then RunTests and collect GetTestResults; a queued console command alone is not evidence.
+
 - `BeginCombatAction` expects `ActiveAction` to be bound already; manual pattern requests must fetch `Actions[ActionIndex]` and set it before execution. Compile can restore inherited capsule collision on a placed boss: reapply the instance response after compiling and save the level; initialize the channel at BeginPlay too.
 - `unreal.Rotator` positional arguments use roll/pitch/yaw; use named `yaw=` in PIE fixtures to avoid flipping the actor. Changing a Blueprint variable type also requires `BlueprintService.refresh_node` on existing variable nodes before rewiring their pins.
 - For contact tests, restore health only when needed and wait for any resulting reaction before attacking; assert the actual attack state. Measure the weapon's contact frames before choosing the active window.

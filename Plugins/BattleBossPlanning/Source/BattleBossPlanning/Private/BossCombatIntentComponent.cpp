@@ -56,7 +56,7 @@ bool StateIs(const UObject* O, const TCHAR* Name)
     return P && P->Struct == FGameplayTag::StaticStruct()
         && P->ContainerPtrToValuePtr<FGameplayTag>(O)->GetTagName() == FName(Name);
 }
-void Invoke(AActor* Boss, FName Name, const FString& Text = FString(), const TCHAR* State = nullptr)
+void Invoke(AActor* Boss, FName Name, const FString& Text = FString())
 {
     if (!IsValid(Boss)) return;
     if (UFunction* Fn = Boss->FindFunction(Name))
@@ -66,12 +66,40 @@ void Invoke(AActor* Boss, FName Name, const FString& Text = FString(), const TCH
         {
             if (!It->HasAnyPropertyFlags(CPF_Parm) || It->HasAnyPropertyFlags(CPF_ReturnParm)) continue;
             if (FStrProperty* P = CastField<FStrProperty>(*It)) P->SetPropertyValue_InContainer(Params.GetStructMemory(), Text);
-            if (State) if (FStructProperty* P = CastField<FStructProperty>(*It))
-                if (P->Struct == FGameplayTag::StaticStruct())
-                    *P->ContainerPtrToValuePtr<FGameplayTag>(Params.GetStructMemory()) = FGameplayTag::RequestGameplayTag(FName(State));
         }
         Boss->ProcessEvent(Fn, Params.GetStructMemory());
     }
+}
+
+bool FillTransitionParameters(UFunction* Fn, void* Params, const FGameplayTag& Expected,
+    const FGameplayTag& Next, const FString& Reason)
+{
+    if (!Fn || !Params || !Expected.IsValid() || !Next.IsValid()) return false;
+    FStructProperty* ExpectedPin = FindFProperty<FStructProperty>(Fn, TEXT("ExpectedState"));
+    FStructProperty* NextPin = FindFProperty<FStructProperty>(Fn, TEXT("NewState"));
+    FStrProperty* ReasonPin = FindFProperty<FStrProperty>(Fn, TEXT("Reason"));
+    if (!ExpectedPin || !NextPin || !ReasonPin
+        || ExpectedPin->Struct != FGameplayTag::StaticStruct() || NextPin->Struct != FGameplayTag::StaticStruct()
+        || !ExpectedPin->HasAnyPropertyFlags(CPF_Parm) || !NextPin->HasAnyPropertyFlags(CPF_Parm)
+        || !ReasonPin->HasAnyPropertyFlags(CPF_Parm)) return false;
+    // ExpectedState is the source-state guard, never the requested destination.
+    *ExpectedPin->ContainerPtrToValuePtr<FGameplayTag>(Params) = Expected;
+    *NextPin->ContainerPtrToValuePtr<FGameplayTag>(Params) = Next;
+    ReasonPin->SetPropertyValue_InContainer(Params, Reason);
+    return true;
+}
+
+bool TransitionState(AActor* Boss, const TCHAR* Expected, const TCHAR* Next, const FString& Reason)
+{
+    if (!IsValid(Boss) || !StateIs(Boss, Expected)) return false;
+    UFunction* Fn = Boss->FindFunction(TEXT("TransitionBossState"));
+    if (!Fn) return false;
+    FStructOnScope Params(Fn);
+    if (!FillTransitionParameters(Fn, Params.GetStructMemory(),
+        FGameplayTag::RequestGameplayTag(FName(Expected)), FGameplayTag::RequestGameplayTag(FName(Next)), Reason)) return false;
+    Boss->ProcessEvent(Fn, Params.GetStructMemory());
+    // A successful ProcessEvent call does not mean the Blueprint accepted the transition.
+    return StateIs(Boss, Next);
 }
 }
 
@@ -112,8 +140,14 @@ void UBossCombatIntentComponent::BeginSelectedIntent()
     SetFlag(Boss, TEXT("bCombatApproachActive"), false);
     SetNumber(Boss, TEXT("UtilityAction"), 0);
     Invoke(Boss, TEXT("StopBossLocomotion"));
+    if (!TransitionState(Boss, TEXT("Boss.Combat.Ready"), TEXT("Boss.Combat.Position"), TEXT("선택한 공격을 위한 위치 잡기")))
+    {
+        FailedUntilBySlot.Add(Slot, Now + 3.0);
+        Publish(TEXT("cancelled"), TEXT("위치 잡기 상태 전환이 거부됨"));
+        Invoke(Boss, TEXT("RecordCombatQA"), TEXT("intent_aborted"));
+        return;
+    }
     bActive = true;
-    Invoke(Boss, TEXT("TransitionBossState"), TEXT("선택한 공격을 위한 위치 잡기"), TEXT("Boss.Combat.Position"));
     Publish(TEXT("position"), TEXT("선택한 공격을 유지하며 진입"));
     Invoke(Boss, TEXT("RecordCombatQA"), TEXT("intent_begin"));
     Advance();
@@ -202,10 +236,11 @@ void UBossCombatIntentComponent::Finish(bool bAttack, const FString& Reason)
     bActive = false;
     Invoke(Boss, TEXT("StopBossLocomotion"));
     Boss->GetCharacterMovement()->MaxWalkSpeed = PreviousSpeed;
-    if (StateIs(Boss, TEXT("Boss.Combat.Position")))
-        Invoke(Boss, TEXT("TransitionBossState"), Reason, TEXT("Boss.Combat.Ready"));
-    Publish(bAttack ? TEXT("attack") : TEXT("cancelled"), Reason);
-    if (bAttack)
+    const bool bReturnedToReady = TransitionState(Boss, TEXT("Boss.Combat.Position"), TEXT("Boss.Combat.Ready"), Reason);
+    const bool bMayAttack = bAttack && bReturnedToReady;
+    Publish(bMayAttack ? TEXT("attack") : TEXT("cancelled"),
+        bAttack && !bReturnedToReady ? TEXT("공격 전 대기 상태 복귀가 거부됨") : Reason);
+    if (bMayAttack)
     {
         SetText(Boss, TEXT("AttackRequestSource"), TEXT("intent"));
         Invoke(Boss, TEXT("BeginCombatAction"));
@@ -294,3 +329,36 @@ float UBossCombatIntentLibrary::AdjustIntentCandidate(AActor* Boss, int32 Candid
     }
     return Score;
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossIntentTransitionParametersTest, "Battle.GOAP.IntentTransitionParameters",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBossIntentTransitionParametersTest::RunTest(const FString& Parameters)
+{
+    // Inspect the actual Blueprint contract without spawning actors or starting PIE.
+    UClass* BossClass = LoadClass<AActor>(nullptr, TEXT("/Game/BossArena/Boss/Blueprints/BP_Boss_Crunch.BP_Boss_Crunch_C"));
+    if (!TestNotNull(TEXT("Crunch class exists"), BossClass)) return false;
+    UFunction* Fn = BossClass->FindFunctionByName(TEXT("TransitionBossState"));
+    if (!TestNotNull(TEXT("State transition function exists"), Fn)) return false;
+    const FGameplayTag Ready = FGameplayTag::RequestGameplayTag(TEXT("Boss.Combat.Ready"));
+    const FGameplayTag Position = FGameplayTag::RequestGameplayTag(TEXT("Boss.Combat.Position"));
+    for (bool bEntering : {true, false})
+    {
+        FStructOnScope Params(Fn);
+        const FGameplayTag Expected = bEntering ? Ready : Position;
+        const FGameplayTag Next = bEntering ? Position : Ready;
+        if (!TestTrue(TEXT("Named Blueprint parameters are supported"),
+            FillTransitionParameters(Fn, Params.GetStructMemory(), Expected, Next, TEXT("contract test")))) return false;
+        const FStructProperty* ExpectedPin = FindFProperty<FStructProperty>(Fn, TEXT("ExpectedState"));
+        const FStructProperty* NextPin = FindFProperty<FStructProperty>(Fn, TEXT("NewState"));
+        TestTrue(TEXT("Source guard remains source"), *ExpectedPin->ContainerPtrToValuePtr<FGameplayTag>(Params.GetStructMemory()) == Expected);
+        TestTrue(TEXT("Destination remains destination"), *NextPin->ContainerPtrToValuePtr<FGameplayTag>(Params.GetStructMemory()) == Next);
+        TestEqual(TEXT("Reason is preserved"), FindFProperty<FStrProperty>(Fn, TEXT("Reason"))->GetPropertyValue_InContainer(Params.GetStructMemory()), FString(TEXT("contract test")));
+    }
+    TestFalse(TEXT("Missing function is rejected"), FillTransitionParameters(nullptr, nullptr, Ready, Position, TEXT("")));
+    FStructOnScope Params(Fn);
+    TestFalse(TEXT("Empty source guard is rejected"), FillTransitionParameters(Fn, Params.GetStructMemory(), FGameplayTag(), Position, TEXT("")));
+    return true;
+}
+#endif
