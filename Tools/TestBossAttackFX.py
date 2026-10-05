@@ -97,7 +97,7 @@ def suite():
              ('Four', 'X', 5.5, 'P_Crunch_Hook_Enemy_Impact'),
              ('Six', 'X', 5.5, 'P_Crunch_GutPunch_Impact'),
              ('Seven', 'B', 5.5, 'P_Crunch_Cross_Enemy_Impact'),
-             ('Nine', 'B', 9.5, 'P_LevelStart_Fist_Slam'),
+             ('Nine', 'B', 9.5, 'P_Crunch_Uppercut_Impact'),
              ('Five', 'X', 11.5, 'P_Crunch_Primary_Impact'),
              ('One', 'B', 5.5, None)]
     state = {'case': -1, 'start': 0, 'prepare': True, 'requested': False,
