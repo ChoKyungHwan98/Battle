@@ -120,6 +120,13 @@ def summarize(records):
         'attack_rejections':dict(Counter(r.get('start_reason','?') for r in boss
                                        if r.get('event') == 'attack_rejected')),
         'accepted_attack_requests':sum(r.get('event') == 'attack_accepted' for r in boss),
+        'intent_aborts':dict(Counter(r.get('intent_reason','?') for r in boss
+                                    if r.get('event') == 'intent_aborted')),
+        'intent_arrivals':sum(r.get('event') == 'intent_arrived' for r in boss),
+        'intent_duration_overruns':[{'line':r['line'], 'serial':r.get('intent_serial'),
+                                    'elapsed':number(r.get('intent_elapsed'))} for r in boss
+                                   if r.get('event') in {'intent_aborted','intent_arrived'}
+                                   and (number(r.get('intent_elapsed')) or 0) > 2.2],
         'sampled_state_seconds':{k:round(v,2) for k,v in sampled_state_seconds.items()},
         'candidate_rows':len(candidates),
         'zero_score_reasons':dict(Counter(r.get('reason','?') for r in candidates
@@ -147,6 +154,9 @@ def markdown(summary, records, source, session, total):
               '- 실제 시작한 패턴: '+json.dumps(summary['actual_attack_starts_by_pattern'],ensure_ascii=False),
               '- 공격 시작 경로: '+json.dumps(summary['actual_attack_starts_by_source'],ensure_ascii=False),
               '- 시작 거부 사유: '+json.dumps(summary['attack_rejections'],ensure_ascii=False),
+              '- 공격 위치 도착: '+str(summary['intent_arrivals']),
+              '- 진입 중단 이유: '+json.dumps(summary['intent_aborts'],ensure_ascii=False),
+              '- 2.2초 초과 종료 기록(프레임 지연 포함): '+str(len(summary['intent_duration_overruns'])),
               '', '## 판정과 회피', '',
               f'- 팔 접촉 전달: {summary["events"].get("contact_submitted",0)}회',
               f'- 관찰한 플레이어 HP 감소: {summary["player_hp_lost_observed"]}',

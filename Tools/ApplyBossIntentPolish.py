@@ -267,3 +267,80 @@ def inspect_stage1():
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     print('VERIFIED', json.dumps(report, ensure_ascii=False))
     return str(path)
+
+
+def apply_stage2():
+    """Connect the built native intent executor without changing physical strike data."""
+    assert not vibeue.exec_tool('EditorToolset.EditorAppToolset','IsPIERunning')
+    native='BossCombatIntentLibrary'
+    for name,kind,value in [('bAttackIntentActive','bool','false'),('IntentPhase','string',''),
+                            ('IntentReason','string',''),('IntentSelectionDistance','real',0),
+                            ('IntentElapsed','real',0),('IntentSerial','int',0),
+                            ('IntentSelectionMaxDistance','real',650)]:
+        if name not in {v.variable_name for v in S.list_variables(B)}:
+            H.variable(B,name,kind,value)
+    unreal.BlueprintEditorLibrary.compile_blueprint(H.asset(B))
+    # Separate permission to SELECT a short entry from the unchanged attack start band.
+    g='ComputeActionScore'; marker='IntentPolish: basic punches can select bounded entry'
+    if not any(n.node_title==marker for n in S.get_nodes_in_graph(B,g,0,'',False)):
+        ids=build(g,[get('Slot','EvaluatedSlot'),get('SelectionMax','IntentSelectionMaxDistance'),
+                     call('Left','KismetMathLibrary','EqualEqual_IntInt'),
+                     call('Right','KismetMathLibrary','EqualEqual_IntInt'),
+                     call('Basic','KismetMathLibrary','BooleanOR'),
+                     call('Range','KismetMathLibrary','SelectFloat')],[
+            ('Slot.EvaluatedSlot','Left.A'),('Slot.EvaluatedSlot','Right.A'),
+            ('Left.ReturnValue','Basic.A'),('Right.ReturnValue','Basic.B'),
+            ('Basic.ReturnValue','Range.bPickA'),('SelectionMax.IntentSelectionMaxDistance','Range.A'),
+            ('11D62E634717BD62E424E380D765A0A7.MaxDistance','Range.B')],
+            [('Left','B',0),('Right','B',1)])
+        wire(g,ids['Range'],'ReturnValue','42768CC043C0F079638EBE9E98FFE705','B')
+        assert S.add_comment_around_nodes(B,g,marker,list(ids.values()))
+    # Existing Execute path -> intent executor. Native code binds no new action:
+    # ActiveAction/SelectedSlot remain the exact result of the Utility draw.
+    g='ChooseCombatAction'; marker='IntentPolish: preserve selected attack through position state'
+    if not any(n.node_title==marker for n in S.get_nodes_in_graph(B,g,0,'',False)):
+        old='D6C8DBF54591DF08F662A79DF4396DD5'
+        edge=next(c for c in S.get_connections(B,g) if c.target_node_id==old and c.target_pin_name=='execute')
+        ids=build(g,[get('Mesh','Mesh'),call('Owner','ActorComponent','GetOwner'),
+                     call('Intent',native,'BeginSelectedAttackIntent')],[
+            ('Mesh.Mesh','Owner.self'),('Owner.ReturnValue','Intent.Boss')])
+        assert S.disconnect_pin(B,g,old,'execute')
+        wire(g,edge.source_node_id,edge.source_pin_name,ids['Intent'],'execute')
+        assert S.add_comment_around_nodes(B,g,marker,list(ids.values()))
+    # Apply failure memory and suppress generic approach only after eligible attack scores exist.
+    g='EvaluateCombatUtility'; marker='IntentPolish: score failed entries and suppress redundant approach'
+    if not any(n.node_title==marker for n in S.get_nodes_in_graph(B,g,0,'',False)):
+        target='F39E53D74D52EE4F8D8D2C8FF1FBCAED'
+        edge=next(c for c in S.get_connections(B,g) if c.target_node_id==target and c.target_pin_name=='execute')
+        ids=build(g,[get('Mesh','Mesh'),call('Owner','ActorComponent','GetOwner'),
+                     get('Slot','EvaluatedSlot'),get('Score','ScoreScratch'),
+                     call('Adjust',native,'AdjustIntentCandidate'),put('Apply','ScoreScratch')],[
+            ('Mesh.Mesh','Owner.self'),('Owner.ReturnValue','Adjust.Boss'),
+            ('Slot.EvaluatedSlot','Adjust.Slot'),('Score.ScoreScratch','Adjust.Score'),
+            ('Adjust.ReturnValue','Apply.ScoreScratch')])
+        wire(g,edge.source_node_id,edge.source_pin_name,ids['Apply'],'execute')
+        wire(g,ids['Apply'],'then',target,'execute')
+        assert S.add_comment_around_nodes(B,g,marker,list(ids.values()))
+    g='RecordCombatQA';marker='IntentPolish: persistent entry QA'
+    if not any(n.node_title==marker for n in S.get_nodes_in_graph(B,g,0,'',False)):
+        write='7351315649F7330AF5C248810231A881'
+        edge=next(c for c in S.get_connections(B,g) if c.target_node_id==write and c.target_pin_name=='InString')
+        row=Q.Row('');row.last=edge.source_node_id+'.'+edge.source_pin_name
+        for key,var,kind in [('intent_active','bAttackIntentActive','bool'),('intent_phase','IntentPhase','string'),
+                             ('intent_reason','IntentReason','string'),('intent_serial','IntentSerial','int'),
+                             ('intent_elapsed','IntentElapsed','real'),('intent_selection_distance','IntentSelectionDistance','real')]:
+            ref='Value'+var;row.nodes.append(get(ref,var));row.add(key,kind,ref+'.'+var)
+        ids=build(g,row.nodes,row.links,row.defaults);ref,pin=row.last.split('.')
+        wire(g,ids[ref],pin,write,'InString')
+        assert S.add_comment_around_nodes(B,g,marker,list(ids.values()))
+    r=S.compile_blueprint(B)
+    print('COMPILE stage2',r.success,list(r.errors),list(r.warnings))
+    assert r.success and not r.errors and not r.warnings
+    assert unreal.EditorAssetLibrary.save_asset(B)
+    for actor in unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors():
+        if actor.get_class()==H.asset(B).generated_class():
+            actor.modify()
+            actor.get_component_by_class(unreal.CapsuleComponent).set_collision_response_to_channel(
+                unreal.CollisionChannel.ECC_VISIBILITY,unreal.CollisionResponseType.ECR_IGNORE)
+    assert unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).save_current_level()
+    print('SAVED stage2')

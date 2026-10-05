@@ -19,7 +19,8 @@ enum class EBossPositionAction : uint8
     DirectApproach,
     FaceTarget,
     OrbitLeft,
-    OrbitRight
+    OrbitRight,
+    StepBack
 };
 
 USTRUCT(BlueprintType)
@@ -56,6 +57,13 @@ class BATTLEBOSSPLANNING_API UBossPositionPlanner : public UBlueprintFunctionLib
     GENERATED_BODY()
 
 public:
+    /** The caller supplies the selected attack's goal; this never selects another attack. */
+    UFUNCTION(BlueprintPure, Category = "Boss|GOAP")
+    static FBossPositionPlan PlanAttackPosition(
+        float Distance, float FacingDot, float StartMin, float StartMax, float MinimumFacingDot,
+        bool bForwardOpen, bool bBackOpen, bool bLeftOpen, bool bRightOpen,
+        bool bProbeRequested, float MoveSpeed);
+
     UFUNCTION(BlueprintCallable, Category = "Boss|GOAP")
     static void CheckSidePaths(
         AActor* Boss,

@@ -9,6 +9,17 @@ def row(**fields):
 
 
 class QAReaderTests(unittest.TestCase):
+    def test_intent_abort_is_separate_from_contact_and_arrival(self):
+        records = parse_lines([
+            row(role='boss', event='intent_aborted', intent_reason='timeout', intent_elapsed=2.03, intent_serial=1),
+            row(role='boss', event='intent_arrived', intent_elapsed=.8, intent_serial=2),
+            row(role='boss', event='intent_aborted', intent_reason='blocked', intent_elapsed=2.8, intent_serial=3)])
+        result = summarize(records)
+        self.assertEqual(result['intent_aborts'], {'timeout':1, 'blocked':1})
+        self.assertEqual(result['intent_arrivals'], 1)
+        self.assertEqual([r['serial'] for r in result['intent_duration_overruns']], ['3'])
+        self.assertEqual(result['player_hp_lost_observed'], 0)
+
     def test_manual_execution_does_not_inherit_stale_choice(self):
         records = parse_lines([
             row(role='boss', event='attack_accepted', slot=8, choice='바디펀치',
