@@ -9,6 +9,29 @@ def row(**fields):
 
 
 class QAReaderTests(unittest.TestCase):
+    def test_manual_execution_does_not_inherit_stale_choice(self):
+        records = parse_lines([
+            row(role='boss', event='attack_accepted', slot=8, choice='바디펀치',
+                started_name='점프 내려찍기', started_source='manual'),
+            row(role='boss', event='state', state='Boss.Combat.Attack.Windup',
+                slot=8, choice='바디펀치', started_name='점프 내려찍기', started_source='manual')])
+        summary = summarize(records)
+        self.assertEqual(summary['actual_attack_starts_by_pattern'], {'점프 내려찍기': 1})
+        self.assertEqual(summary['actual_attack_starts_by_source'], {'manual': 1})
+        self.assertEqual(summary['accepted_attack_requests'], 1)
+
+    def test_rejected_request_is_not_an_attack(self):
+        records = parse_lines([row(role='boss', event='attack_rejected',
+                                   start_reason='distance', started_name='이전 공격')])
+        summary = summarize(records)
+        self.assertEqual(summary['actual_attack_starts_by_pattern'], {})
+        self.assertEqual(summary['attack_rejections'], {'distance': 1})
+
+    def test_legacy_names_are_not_treated_as_execution_evidence(self):
+        records = parse_lines([row(role='boss', event='state',
+                                   state='Boss.Combat.Attack.Windup', slot=8, choice='바디펀치')])
+        self.assertEqual(summarize(records)['actual_attack_starts_by_pattern'], {'slot 8 (legacy)': 1})
+
     def test_sessions_separate_on_boss_start_only(self):
         records = parse_lines([row(role='boss',event='session_start'),
                                row(role='player',event='session_start'),

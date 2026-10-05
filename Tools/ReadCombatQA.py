@@ -63,6 +63,12 @@ def summarize(records):
     choices = [r for r in boss if r.get('event') == 'choice']
     samples = [r for r in boss if r.get('event') == 'sample']
     candidates = [r for r in records if r['role'] == 'candidate']
+    starts = [r for r in boss if r.get('event') == 'state'
+              and r.get('state', '').endswith('.Windup')]
+    # Selection text can remain from a previous action in manual/phase requests.
+    # New execution snapshots are authoritative; old logs can only identify a slot.
+    def execution_name(r):
+        return r.get('started_name') or ('slot ' + r.get('slot', '?') + ' (legacy)')
     events = Counter(r.get('event', 'candidate') for r in boss if r.get('event') != 'sample')
     # State time is sampled and capped at one second per interval. Gaps are never
     # counted as proof that an actor stayed in a state while paused/unrecorded.
@@ -108,10 +114,12 @@ def summarize(records):
         'last_game_time':max(times) if times else None,
         'choices':dict(Counter(r.get('choice',r.get('slot','?')) for r in choices)),
         'longest_identical_choice_streak':longest, 'events':dict(events),
-        'actual_attack_starts_by_slot':dict(Counter(r.get('slot','?') for r in boss
-            if r.get('event')=='state' and r.get('state','').endswith('.Windup'))),
-        'actual_attack_starts_by_pattern':dict(Counter(r.get('choice','?') for r in boss
-            if r.get('event')=='state' and r.get('state','').endswith('.Windup'))),
+        'actual_attack_starts_by_slot':dict(Counter(r.get('slot','?') for r in starts)),
+        'actual_attack_starts_by_pattern':dict(Counter(execution_name(r) for r in starts)),
+        'actual_attack_starts_by_source':dict(Counter(r.get('started_source','legacy_unknown') for r in starts)),
+        'attack_rejections':dict(Counter(r.get('start_reason','?') for r in boss
+                                       if r.get('event') == 'attack_rejected')),
+        'accepted_attack_requests':sum(r.get('event') == 'attack_accepted' for r in boss),
         'sampled_state_seconds':{k:round(v,2) for k,v in sampled_state_seconds.items()},
         'candidate_rows':len(candidates),
         'zero_score_reasons':dict(Counter(r.get('reason','?') for r in candidates
@@ -137,6 +145,8 @@ def markdown(summary, records, source, session, total):
     lines += [f'- 같은 선택의 최장 연속: {summary["longest_identical_choice_streak"]}회',
               '- 실제 공격 준비 진입(슬롯별): '+json.dumps(summary['actual_attack_starts_by_slot'],ensure_ascii=False),
               '- 실제 시작한 패턴: '+json.dumps(summary['actual_attack_starts_by_pattern'],ensure_ascii=False),
+              '- 공격 시작 경로: '+json.dumps(summary['actual_attack_starts_by_source'],ensure_ascii=False),
+              '- 시작 거부 사유: '+json.dumps(summary['attack_rejections'],ensure_ascii=False),
               '', '## 판정과 회피', '',
               f'- 팔 접촉 전달: {summary["events"].get("contact_submitted",0)}회',
               f'- 관찰한 플레이어 HP 감소: {summary["player_hp_lost_observed"]}',
