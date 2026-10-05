@@ -287,6 +287,8 @@ def qa_fields():
 
 def apply():
     assert not vibeue.exec_tool('EditorToolset.EditorAppToolset','IsPIERunning')
+    if 'bPunchFootSync' in {v.variable_name for v in S.list_variables(B)}:
+        raise RuntimeError('Archived Jog-prefix authoring: use ApplyPunchFootSync.py for the current ordinary punch policy.')
     configure_pattern();repair_pattern_dispatch();finite_step_budget();approach_handoff();qa_fields()
     r=S.compile_blueprint(B)
     print('COMPILE',r.success,list(r.errors),list(r.warnings));assert r.success and not r.warnings

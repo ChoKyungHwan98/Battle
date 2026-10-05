@@ -189,6 +189,8 @@ def qa():
 
 def apply():
     assert not vibeue.exec_tool('EditorToolset.EditorAppToolset','IsPIERunning')
+    if 'bPunchFootSync' in {v.variable_name for v in S.list_variables(B)}:
+        raise RuntimeError('Archived generic punch travel: use ApplyPunchFootSync.py to retain the measured foot timing.')
     budget();reach();body_clearance();qa();retime_montages()
     result=S.compile_blueprint(B)
     assert result.success and not result.errors and not result.warnings,(result.errors,result.warnings)
