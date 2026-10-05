@@ -14,30 +14,31 @@ B, S, A = H.B, unreal.BlueprintService, unreal.AnimMontageService
 ROOT = '/Game/BossArena/Boss/Animations/'
 CARDS = '/Game/BossArena/Boss/AI/Actions/'
 node, get, put, call = H.node, H.get, H.put, H.call
-PREFIX_RATE = 2.0
+PREFIX_RATE = 1.25  # Restore the original heavy preparation tempo after user review.
 
 
 def build(graph, nodes, links=(), defaults=()):
     return G.build(B, graph, nodes, links, defaults)
 
 
-def retime_montages():
+def retime_montages(preparation_only=False):
     # Keep strike/FX windows and source punch playback unchanged.
     cls = H.asset('/Game/BossArena/Boss/Animations/ANS_BossAttackStep').generated_class()
     for side, end in [('Left', .45), ('Right', .43)]:
         base = H.asset(CARDS+'DA_Attack_'+side)
         mp = base.get_editor_property('Montage').get_path_name().split('.')[0]
         montage = H.asset(mp)
-        unreal.get_editor_subsystem(unreal.AssetEditorSubsystem).close_all_editors_for_asset(montage)
-        montage.modify()
-        events = unreal.AnimationLibrary.get_animation_notify_events(montage)
-        notifies = A.list_notifies(mp)
-        for index, event in enumerate(events):
-            if event.notify_state_class and event.notify_state_class.get_class() == cls:
-                assert A.set_notify_duration(mp,index,end-notifies[index].trigger_time)
-                event.notify_state_class.set_editor_property('StepDistance',240)
-        assert unreal.EditorAssetLibrary.save_loaded_asset(montage,False)
-        print('MODIFIED punch travel',mp,240,end)
+        if not preparation_only:
+            unreal.get_editor_subsystem(unreal.AssetEditorSubsystem).close_all_editors_for_asset(montage)
+            montage.modify()
+            events = unreal.AnimationLibrary.get_animation_notify_events(montage)
+            notifies = A.list_notifies(mp)
+            for index, event in enumerate(events):
+                if event.notify_state_class and event.notify_state_class.get_class() == cls:
+                    assert A.set_notify_duration(mp,index,end-notifies[index].trigger_time)
+                    event.notify_state_class.set_editor_property('StepDistance',240)
+            assert unreal.EditorAssetLibrary.save_loaded_asset(montage,False)
+            print('MODIFIED punch travel',mp,240,end)
         for count in [1,2]:
             mp=ROOT+f'AM_Boss_Advance_{side}_{count}Step'
             montage=H.asset(mp)
