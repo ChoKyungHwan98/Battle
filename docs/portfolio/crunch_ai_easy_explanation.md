@@ -1,6 +1,6 @@
 # Crunch AI를 면접에서 쉽게 설명하기
 
-이 문서는 현재 구현을 기획자 말로 설명하기 위한 메모다. [상세 설계](crunch_combat_ai_v2_design.md)와 [DS3 원본 조사](../research/ds3_gundyr_original_ai_extract.md)는 근거와 남은 시험을 기록한다.
+이 문서는 현재 구현을 기획자 말로 설명하기 위한 메모다. **왜 그런 행동을 원했고 무엇을 바꾸었는지**는 [문제·의도·변경 기록](crunch_design_intent_and_decisions_20261005.md)부터 읽는다. [상세 설계](crunch_combat_ai_v2_design.md)와 [DS3 원본 조사](../research/ds3_gundyr_original_ai_extract.md)는 근거와 남은 시험을 기록한다.
 
 ## 한 문장
 
