@@ -14,8 +14,8 @@ def build(path, graph, nodes, links=(), defaults=()):
         [{'from_': a, 'to': b} for a, b in links],
         [{'node_ref': a, 'pin_name': b, 'value': str(c)} for a, b, c in defaults],
         False, False)
-    print('MODIFIED', path, graph, result.success, list(result.errors))
-    assert result.success, list(result.errors)
+    print('MODIFIED', path, graph, result.success, list(result.errors), list(result.warnings))
+    assert result.success and not result.warnings, (list(result.errors), list(result.warnings))
     return dict(result.ref_to_node_id)
 
 
@@ -119,7 +119,7 @@ def apply():
             ('StateGate.then', 'Time.execute'), ('Elapsed.AttackStepElapsed', 'NextTime.A'),
             (e+'.DeltaSeconds', 'NextTime.B'), ('NextTime.ReturnValue', 'BoundTime.Value'),
             ('Duration.AttackStepDuration', 'BoundTime.Max'), ('BoundTime.ReturnValue', 'Time.AttackStepElapsed'),
-            ('Time.then', 'Move.execute'), ('Time.AttackStepElapsed', 'Ratio.A'),
+            ('Time.then', 'Move.execute'), ('Time.Output_Get', 'Ratio.A'),
             ('Duration.AttackStepDuration', 'Ratio.B'), ('Ratio.ReturnValue', 'Ease.Alpha'),
             ('Ease.ReturnValue', 'Target.A'), ('Distance.AttackStepDistance', 'Target.B'),
             ('Target.ReturnValue', 'Delta.A'), ('Previous.AttackStepProgress', 'Delta.B'),
