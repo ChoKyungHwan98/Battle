@@ -758,6 +758,31 @@ bool CanLinkTwoHit(float Distance, float Dot, float Min, float Max, bool bTarget
     return bTargetAvailable && FMath::IsFinite(Distance) && FMath::IsFinite(Dot)
         && Distance >= Min && Distance <= Max + 240.f && Dot >= 0.f;
 }
+
+bool LabMeasurementPolicy(const FString& LevelName, const FString& Source, bool bMeasurement)
+{
+    return bMeasurement && LevelName == TEXT("Lvl_BossMotionLab") && Source == TEXT("manual");
+}
+
+bool CanLinkMeasuredTwoHit(bool bMeasurement, bool bTargetAvailable, bool bCombatLink)
+{
+    return bTargetAvailable && (bMeasurement || bCombatLink);
+}
+}
+
+bool UBossCombatIntentLibrary::IsLabRangeMeasurementAction(AActor* Boss)
+{
+    if (!IsValid(Boss)) return false;
+    const UBossCombatIntentComponent* Intent = Boss->FindComponentByClass<UBossCombatIntentComponent>();
+    return Intent && LabMeasurementPolicy(UGameplayStatics::GetCurrentLevelName(Boss, true),
+        Text(Boss, TEXT("AttackRequestSource")), Intent->bLabRangeMeasurementAction);
+}
+
+bool UBossCombatIntentLibrary::IsLabStartLimitOverride(AActor* Boss)
+{
+    if (!IsValid(Boss)) return false;
+    const UBossCombatIntentComponent* Intent = Boss->FindComponentByClass<UBossCombatIntentComponent>();
+    return Intent && Intent->bLabStartRequestScope && IsLabRangeMeasurementAction(Boss);
 }
 
 void UBossCombatIntentLibrary::EnsureActionCooldownCapacity(AActor* Boss)
@@ -826,8 +851,9 @@ bool UBossCombatIntentLibrary::ContinueTwoHitOrRecover(AActor* Boss)
     const bool bTargetAvailable = IsValid(Target) && Number(Target, TEXT("CurrentHealth")) > 0
         && !Flag(Target, TEXT("bKnockedDown"));
     const FVector Delta = IsValid(Target) ? Target->GetActorLocation() - Boss->GetActorLocation() : FVector::ZeroVector;
-    if (CanLinkTwoHit(Delta.Size2D(), FVector::DotProduct(Boss->GetActorForwardVector(), Delta.GetSafeNormal2D()),
-        Number(Action, TEXT("MinDistance")), Number(Action, TEXT("MaxDistance")), bTargetAvailable))
+    if (CanLinkMeasuredTwoHit(IsLabRangeMeasurementAction(Boss), bTargetAvailable,
+        CanLinkTwoHit(Delta.Size2D(), FVector::DotProduct(Boss->GetActorForwardVector(), Delta.GetSafeNormal2D()),
+            Number(Action, TEXT("MinDistance")), Number(Action, TEXT("MaxDistance")), bTargetAvailable)))
     {
         SetFlag(Boss,TEXT("bDirectionCommitted"),false);
         SetFlag(Boss,TEXT("bCanTurn"),true);
@@ -852,6 +878,20 @@ bool UBossCombatIntentLibrary::ContinueTwoHitOrRecover(AActor* Boss)
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossLabMeasurementPolicyTest,"Battle.MotionLab.RangeMeasurementPolicy",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBossLabMeasurementPolicyTest::RunTest(const FString& Parameters)
+{
+    TestTrue(TEXT("Manual lab measurement permits range sampling"), LabMeasurementPolicy(TEXT("Lvl_BossMotionLab"), TEXT("manual"), true));
+    TestFalse(TEXT("Arena retains its combat limits"), LabMeasurementPolicy(TEXT("Lvl_Arena_01"), TEXT("manual"), true));
+    TestFalse(TEXT("Similar map name does not authorize measurement"), LabMeasurementPolicy(TEXT("Lvl_BossMotionLab_Copy"), TEXT("manual"), true));
+    TestFalse(TEXT("Automatic choices retain their limits"), LabMeasurementPolicy(TEXT("Lvl_BossMotionLab"), TEXT("utility"), true));
+    TestFalse(TEXT("Combat check mode retains limits"), LabMeasurementPolicy(TEXT("Lvl_BossMotionLab"), TEXT("manual"), false));
+    TestTrue(TEXT("Measurement continues distant two-hit animation"), CanLinkMeasuredTwoHit(true, true, false));
+    TestFalse(TEXT("Combat still aborts an invalid link"), CanLinkMeasuredTwoHit(false, true, false));
+    TestFalse(TEXT("Measurement cannot link to unavailable target"), CanLinkMeasuredTwoHit(true, false, false));
+    return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossLabPunchModeTest,"Battle.MotionLab.PunchModes",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FBossLabPunchModeTest::RunTest(const FString& Parameters)

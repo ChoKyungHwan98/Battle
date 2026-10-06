@@ -55,7 +55,9 @@ private:
     bool bInitialized = false;
     bool bInputBound = false;
     bool bManualActionActive = false;
+    bool bRangeMeasurement = true;
     float ManualActionStartTime = 0.f;
+    float ManualActionStartDistance = 0.f;
     int32 ManualActionIndex = INDEX_NONE;
     int32 ManualPunchMode = 0;
     FVector ManualActionStartLocation = FVector::ZeroVector;
@@ -96,6 +98,7 @@ private:
     void ToggleHitboxes();
     void ToggleControls();
     void TogglePunchMode();
+    void ToggleRangeMeasurement();
     void SampleHandContact();
     void DrawDiagnostics() const;
     void DrawOverlay() const;

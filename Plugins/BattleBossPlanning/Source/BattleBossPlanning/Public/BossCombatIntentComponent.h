@@ -22,6 +22,9 @@ public:
     float FailureMultiplier(int32 Slot) const;
     /** Transient test override; the caller must be the MotionLab fixture. 0=combat, 1=no travel, 2=one step. */
     int32 MotionLabPunchMode = 0;
+    /** Runtime-only fixture permissions. Start override exists only inside a manual lab request. */
+    bool bLabStartRequestScope = false;
+    bool bLabRangeMeasurementAction = false;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float RunSpeed = 600.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float MaxDuration = 2.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float ReplanInterval = .2f;
@@ -72,6 +75,9 @@ class BATTLEBOSSPLANNING_API UBossCombatIntentLibrary : public UBlueprintFunctio
 {
     GENERATED_BODY()
 public:
+    /** Bypasses distance/facing/cooldown starts only in the scoped MotionLab manual request. */
+    UFUNCTION(BlueprintPure, Category="Boss|Motion Lab") static bool IsLabStartLimitOverride(AActor* Boss);
+    static bool IsLabRangeMeasurementAction(AActor* Boss);
     UFUNCTION(BlueprintCallable, Category="Boss|Intent") static void BeginSelectedAttackIntent(AActor* Boss);
     UFUNCTION(BlueprintPure, Category="Boss|Intent") static FString DescribeCombatDebug(AActor* Boss);
     /** One finite step in an ordinary punch; sampled once when the step opens. */

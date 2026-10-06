@@ -144,6 +144,7 @@ TSharedRef<SWidget> UBossMotionLabOverlay::RebuildWidget()
     ControlsText->SetFont(ControlsFont);
     ControlsText->SetColorAndOpacity(FSlateColor(FLinearColor(0.78f, 0.88f, 0.91f, 1.f)));
     ControlsText->SetText(FText::FromString(
+        TEXT("\nJ 사거리 측정 / 실전 조건 검사 전환\n")
         TEXT("\n주먹 비교  L 전진 방식 변경 → 1 왼손 / 2 오른손\n")
         TEXT("실전 행동  3 어퍼컷\n")
         TEXT("               4 휩쓸기 · 5 연계 · 6 가드 크래시\n")
@@ -212,6 +213,7 @@ void ABossMotionLabDirector::BindInput()
     Key(EKeys::H, &ABossMotionLabDirector::ToggleHitboxes);
     Key(EKeys::Tab, &ABossMotionLabDirector::ToggleControls);
     Key(EKeys::L, &ABossMotionLabDirector::TogglePunchMode);
+    Key(EKeys::J, &ABossMotionLabDirector::ToggleRangeMeasurement);
     for (const FKey K : {EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five,
         EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine, EKeys::Zero})
         InputComponent->BindKey(K, Press, this, &ABossMotionLabDirector::OnNumberKey);
@@ -321,6 +323,11 @@ bool ABossMotionLabDirector::EnterReadyState() const
 void ABossMotionLabDirector::StopCurrentMotion() const
 {
     if (!IsValid(BossActor)) return;
+    if (UBossCombatIntentComponent* Intent = BossActor->FindComponentByClass<UBossCombatIntentComponent>())
+    {
+        Intent->bLabStartRequestScope = false;
+        Intent->bLabRangeMeasurementAction = false;
+    }
     if (ACharacter* Boss = Cast<ACharacter>(BossActor))
     {
         if (UAnimInstance* Anim = Boss->GetMesh()->GetAnimInstance()) Anim->Montage_Stop(0.08f);
@@ -340,6 +347,7 @@ void ABossMotionLabDirector::ResetFixture()
     DamageEventCount = 0;
     DamageTotal = 0.f;
     ManualActionIndex = INDEX_NONE;
+    ManualActionStartDistance = 0.f;
     FirstHandContactAt = FirstWindowOpenAt = LastHandContactAt = ClosestHandGapAt = LastContactSampleAt = -1.f;
     ClosestHandGap = BIG_NUMBER;
     SuppressAutonomousChoice();
@@ -392,9 +400,21 @@ void ABossMotionLabDirector::TogglePunchMode()
     LastResult = FString::Printf(TEXT("비교 방식: %s · 1 왼손 / 2 오른손"),PunchModes[PunchMode]);
 }
 
+void ABossMotionLabDirector::ToggleRangeMeasurement()
+{
+    if (!bInitialized || bManualActionActive || !Chain.IsEmpty())
+    {
+        LastResult = TEXT("공격 종료 뒤 J키로 측정·실전 검사를 바꾸세요");
+        return;
+    }
+    bRangeMeasurement = !bRangeMeasurement;
+    LastResult = bRangeMeasurement ? TEXT("사거리 측정 ON · 거리·방향·쿨다운 제한 없이 실제 접촉 시험")
+        : TEXT("실전 조건 검사 · 거리·방향·쿨다운 적용");
+}
+
 void ABossMotionLabDirector::RequestAction(int32 Index)
 {
-    if (!bInitialized || !IsValid(BossActor)) return;
+    if (!bInitialized || !IsValid(BossActor) || !PlayerActor.IsValid()) return;
     const FStructProperty* StateProperty = FindFProperty<FStructProperty>(BossActor->GetClass(), TEXT("BossState"));
     const FGameplayTag* State = StateProperty ? StateProperty->ContainerPtrToValuePtr<FGameplayTag>(BossActor) : nullptr;
     if (!State || !State->MatchesTagExact(FGameplayTag::RequestGameplayTag(TEXT("Boss.Combat.Ready"))))
@@ -409,12 +429,13 @@ void ABossMotionLabDirector::RequestAction(int32 Index)
     ManualActionIndex = Index;
     ManualPunchMode = (Index == 0 || Index == 1) ? PunchMode : 0;
     ManualActionStartLocation = BossActor->GetActorLocation();
+    ManualActionStartDistance = FVector::Dist2D(ManualActionStartLocation, PlayerActor->GetActorLocation());
     FirstHandContactAt = FirstWindowOpenAt = LastHandContactAt = ClosestHandGapAt = LastContactSampleAt = -1.f;
     ClosestHandGap = BIG_NUMBER;
     BossActor->SetActorTickEnabled(true);
     bManualActionActive = true;
     ManualActionStartTime = GetWorld()->GetTimeSeconds();
-    WriteNumber(BossActor,TEXT("UtilityDistance"),FVector::Dist2D(BossActor->GetActorLocation(),PlayerActor->GetActorLocation()));
+    WriteNumber(BossActor,TEXT("UtilityDistance"),ManualActionStartDistance);
     WriteNumber(BossActor,TEXT("AttackStepDistance"),0);
     UBossCombatIntentComponent* Intent = BossActor->FindComponentByClass<UBossCombatIntentComponent>();
     if (!Intent)
@@ -425,6 +446,7 @@ void ABossMotionLabDirector::RequestAction(int32 Index)
         Intent->AddTickPrerequisiteActor(BossActor);
     }
     Intent->MotionLabPunchMode = (Index == 0 || Index == 1) ? PunchMode : 0;
+    Intent->bLabRangeMeasurementAction = bRangeMeasurement;
     // A numbered lab request measures exactly one action. The boss's ordinary
     // follow-up chooser clears this flag at the end of that action.
     if (FBoolProperty* Followup = FindFProperty<FBoolProperty>(BossActor->GetClass(), TEXT("bInFollowup")))
@@ -439,18 +461,23 @@ void ABossMotionLabDirector::RequestAction(int32 Index)
         for (TFieldIterator<FProperty> It(Fn); It; ++It)
             if ((*It)->HasAnyPropertyFlags(CPF_Parm) && !(*It)->HasAnyPropertyFlags(CPF_ReturnParm))
                 if (FIntProperty* Int = CastField<FIntProperty>(*It)) { Int->SetPropertyValue_InContainer(Params.GetStructMemory(), Index); break; }
-        BossActor->ProcessEvent(Fn, Params.GetStructMemory());
+        {
+            TGuardValue<bool> RequestScope(Intent->bLabStartRequestScope, bRangeMeasurement);
+            BossActor->ProcessEvent(Fn, Params.GetStructMemory());
+        }
         if (ReadBool(BossActor, TEXT("bActionStartAllowed")))
         {
-            LastResult = FString::Printf(TEXT("%d키 실전 행동 실행 중"), (Index + 1) % 10);
-            UE_LOG(LogTemp,Display,TEXT("MotionLab request slot=%d punchMode=%d startDistance=%.1fcm"),
-                Index,ManualPunchMode,FVector::Dist2D(ManualActionStartLocation,PlayerActor->GetActorLocation()));
+            LastResult = FString::Printf(TEXT("%d키 %s 실행 중"), (Index + 1) % 10,
+                bRangeMeasurement ? TEXT("사거리 측정") : TEXT("실전 행동"));
+            UE_LOG(LogTemp,Display,TEXT("MotionLab request slot=%d punchMode=%d measurement=%d startDistance=%.1fcm"),
+                Index,ManualPunchMode,bRangeMeasurement ? 1 : 0,ManualActionStartDistance);
         }
         else
         {
             const FStrProperty* Reason = FindFProperty<FStrProperty>(BossActor->GetClass(), TEXT("ActionStartReason"));
             LastResult = TEXT("요청 거부 · ") + (Reason ? Reason->GetPropertyValue_InContainer(BossActor) : TEXT("시작 조건 불충족"));
             bManualActionActive = false;
+            Intent->bLabRangeMeasurementAction = false;
             BossActor->SetActorTickEnabled(false);
         }
     }
@@ -458,6 +485,7 @@ void ABossMotionLabDirector::RequestAction(int32 Index)
     {
         LastResult = TEXT("실전 행동 요청 함수를 찾지 못함");
         bManualActionActive = false;
+        Intent->bLabRangeMeasurementAction = false;
         BossActor->SetActorTickEnabled(false);
     }
 }
@@ -616,14 +644,15 @@ void ABossMotionLabDirector::DrawOverlay() const
             ReadNumber(BossActor,TEXT("AttackStepDistance")),*Contact,*Window)
         : TEXT("");
     const FString Text = FString::Printf(
-        TEXT("\n주먹 방식: %s  [L 변경]\n%s\n")
-        TEXT("거리  %.0f cm  ·  타격 창  %s\n")
+        TEXT("\n%s  [J 전환]\n주먹 방식: %s  [L 변경]\n%s\n")
+        TEXT("시작 거리  %.0f cm  ·  현재 거리  %.0f cm\n타격 창  %s\n")
         TEXT("피해  %d회 / %.0f  ·  적중  %s\n")
         TEXT("%s")
         TEXT("\n미리보기 선택 %d/%d  %s\n")
         TEXT("보스 HP  %.0f  ·  플레이어 불사\n")
         TEXT("\n%s\n"),
-        PunchModes[PunchMode],*Action,
+        bRangeMeasurement ? TEXT("사거리 측정 ON") : TEXT("실전 조건 검사"),
+        PunchModes[PunchMode],*Action,ManualActionStartDistance,
         IsValid(BossActor) && PlayerActor.IsValid() ? FVector::Dist2D(BossActor->GetActorLocation(), PlayerActor->GetActorLocation()) : -1.f,
         ReadBool(BossActor, TEXT("bPhysicalStrikeOpen"))
             ? (ReadBool(BossActor, TEXT("bPhysicalStrikeHit")) ? TEXT("소진") : TEXT("열림"))
@@ -659,6 +688,8 @@ void ABossMotionLabDirector::Tick(float DeltaSeconds)
         if (bReady && !bMontagePlaying && GetWorld()->GetTimeSeconds() - ManualActionStartTime > 0.35f)
         {
             bManualActionActive = false;
+            if (UBossCombatIntentComponent* Intent = BossActor->FindComponentByClass<UBossCombatIntentComponent>())
+                Intent->bLabRangeMeasurementAction = false;
             BossActor->SetActorTickEnabled(false);
             LastResult = (ManualActionIndex == 0 || ManualActionIndex == 1) && ClosestHandGap < BIG_NUMBER * 0.5f
                 ? FString::Printf(TEXT("행동 완료 · 최근접 %.0f cm (%.2f초)"), ClosestHandGap, ClosestHandGapAt)
