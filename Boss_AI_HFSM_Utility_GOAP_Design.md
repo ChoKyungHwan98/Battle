@@ -1,5 +1,9 @@
 # Crunch 보스 전투 AI 설계
 
+> 2026-10-06 사용자 플레이 평가로 중거리 공격 경험의 실패를 확인했다.
+> 400~500cm에서 발을 내디디며 공격을 시작하는 요구는
+> [중거리 재설계](docs/portfolio/crunch_midrange_strike_redesign_20261006.md)를 우선한다.
+
 상태: 플레이 가능한 구현 기준안. 수치와 애니메이션 접합은 플레이테스트로 조정한다.
 **2026-10-06 현재 판단·이동 연결은 [최신 진행 기록](docs/portfolio/crunch_intent_polish_progress_20261005.md)을 우선한다.**
 [제출 전 확인표](docs/portfolio/crunch_polish_acceptance_20261006.md)는 완료와 미확인을 구분한다.
