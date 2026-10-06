@@ -34,9 +34,10 @@ float OnePunchStep(float StartDistance, float AuthoredDistance, float RetreatSpe
     if (!FMath::IsFinite(StartDistance) || !FMath::IsFinite(AuthoredDistance)
         || !FMath::IsFinite(RetreatSpeed)) return 0.f;
     if (StartDistance < 300.f) return FMath::Clamp(AuthoredDistance, 0.f, 145.f);
-    // Designer's single-step band is 300..400cm. Do not add steps or change tempo.
-    const float Lead = FMath::Clamp(RetreatSpeed, 0.f, 450.f) * .1f;
-    return FMath::Clamp(FMath::Max(AuthoredDistance, StartDistance - 255.f + Lead), 0.f, 145.f);
+    // The designer accepted MotionLab's full single step. Use that same finite
+    // request in the 300..400cm starting band, with the existing foot curve.
+    // Capsule clearance can shorten travel; target movement cannot extend it.
+    return 145.f;
 }
 
 float ApplyLabPunchMode(bool bMotionLab, int32 Mode, float CombatStep, float Budget)
@@ -728,7 +729,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossLabPunchModeTest,"Battle.MotionLab.PunchMo
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FBossLabPunchModeTest::RunTest(const FString& Parameters)
 {
-    TestEqual(TEXT("Combat mode preserves adaptive step"),ApplyLabPunchMode(true,0,80,145),80.f);
+    TestEqual(TEXT("Combat mode preserves requested step"),ApplyLabPunchMode(true,0,80,145),80.f);
     TestEqual(TEXT("Basic fixture suppresses body travel"),ApplyLabPunchMode(true,1,80,145),0.f);
     TestEqual(TEXT("Single-step fixture requests full finite step"),ApplyLabPunchMode(true,2,80,145),145.f);
     TestEqual(TEXT("Remaining budget still bounds forced step"),ApplyLabPunchMode(true,2,80,40),40.f);
@@ -741,6 +742,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossDesignerDistanceBandTest, "Battle.GOAP.Des
 bool FBossDesignerDistanceBandTest::RunTest(const FString& Parameters)
 {
     TestEqual(TEXT("Close punch preserves source step"), OnePunchStep(175,66,450), 66.f);
+    TestEqual(TEXT("Below single-step band preserves source travel"), OnePunchStep(299,87,0),87.f);
+    TestEqual(TEXT("300cm uses the accepted lab step"), OnePunchStep(300,66,0),145.f);
+    TestEqual(TEXT("350cm uses the accepted lab step"), OnePunchStep(350,87,0),145.f);
     TestEqual(TEXT("400cm has finite one-step travel"), OnePunchStep(400,66,0),145.f);
     TestEqual(TEXT("Retreat cannot extend step past cap"), OnePunchStep(400,66,650),145.f);
     TestEqual(TEXT("Invalid geometry cannot move"), OnePunchStep(std::numeric_limits<float>::quiet_NaN(),66,0),0.f);
