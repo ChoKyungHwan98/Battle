@@ -280,8 +280,8 @@ def apply(plan):
     print('MODIFIED',CARD,'original action ID and damage; retimed contact/FX; root owns travel')
     report={'sequence':SEQ,'montage':MONTAGE,'card':CARD,'prefix_source_seconds':PREFIX,
         'consumed_original_windup_seconds':CONSUMED,'authored_travel_local_cm':TRAVEL,
-        'authored_travel_at_scale_1_3_cm':110,'contact_window_montage':[.346667+OFFSET,.486667+OFFSET],
+        'authored_travel_at_scale_1_3_cm':TRAVEL*1.3,'contact_window_montage':[.346667+OFFSET,.486667+OFFSET],
         'metrics':plan['metrics'],'gameplay_verified':False,'arena_unchanged':True}
-    path=Path(unreal.Paths.project_saved_dir())/'VibeUE/Reports/right_foot_left_punch_20261006.json'
+    path=Path(unreal.Paths.project_saved_dir())/'VibeUE/Reports'/plan.get('report_file','right_foot_left_punch_20261006.json')
     path.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     return str(path)

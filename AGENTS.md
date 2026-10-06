@@ -1,5 +1,7 @@
 # Battle workspace
 
+- A 60fps authored sequence inheriting 30fps PlatformTargetFrameRate must end on an even authored frame; a half-frame compression endpoint can assert in AnimCompressionTypes.cpp. Current Crunch hand traces use hand_l/r socket centers, so archived hand_slide capsule fixtures must not predict current reach.
+
 - Native calls to Crunch's `TransitionBossState` must bind `ExpectedState` to the source state and `NewState` to the destination by parameter name; filling every GameplayTag parameter with the destination rejects the transition. Check the resulting BossState before advancing. For C++ automation, use AutomationTestToolset DiscoverTests then RunTests and collect GetTestResults; a queued console command alone is not evidence.
 
 - `BeginCombatAction` expects `ActiveAction` to be bound already; manual pattern requests must fetch `Actions[ActionIndex]` and set it before execution. Compile can restore inherited capsule collision on a placed boss: reapply the instance response after compiling and save the level; initialize the channel at BeginPlay too.

@@ -29,6 +29,27 @@ def verify():
     print('VERIFIED lab hook after ordinary setup; original Arena Actions unchanged')
 
 
+def prepare_manual_request():
+    """Bind the lab definition before validation so its 550cm range is checked."""
+    assert not vibeue.exec_tool('EditorToolset.EditorAppToolset','IsPIERunning')
+    g='RequestCombatAction'; marker='MotionLab: bind foot-plant definition before start validation'
+    source='ECECADD342CE4CFC58FA9EBA8CEF4EED'; destination='78B761954BA2583D31A0F79DA1108AFD'
+    if not any(n.node_title==marker for n in S.get_nodes_in_graph(B,g,0,'',False)):
+        assert any(e.source_node_id==source and e.target_node_id==destination and e.target_pin_name=='execute' for e in S.get_connections(B,g))
+        ids=G.build(B,g,[H.get('Mesh','Mesh'),H.call('Owner','ActorComponent','GetOwner'),
+            H.call('Prepare','BossCombatIntentLibrary','ConfigureLabRightFootPunch')],
+            [('Mesh.Mesh','Owner.self'),('Owner.ReturnValue','Prepare.Boss')])
+        assert S.disconnect_pin(B,g,destination,'execute')
+        assert S.connect_nodes(B,g,source,'then',ids['Prepare'],'execute')
+        assert S.connect_nodes(B,g,ids['Prepare'],'then',destination,'execute')
+        assert S.add_comment_around_nodes(B,g,marker,list(ids.values()))
+        print('MODIFIED',B,g,marker)
+    compiled=S.compile_blueprint(B)
+    assert compiled.success and not compiled.errors and not compiled.warnings
+    assert unreal.EditorAssetLibrary.save_asset(B)
+    print('COMPILED manual request 0 errors/warnings; native scoped guard retains Arena behavior')
+
+
 def apply():
     assert not vibeue.exec_tool('EditorToolset.EditorAppToolset','IsPIERunning')
     assert hasattr(unreal.BossCombatIntentLibrary,'configure_lab_right_foot_punch')
