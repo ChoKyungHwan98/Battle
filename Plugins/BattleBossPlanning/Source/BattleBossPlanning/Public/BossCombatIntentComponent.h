@@ -17,6 +17,8 @@ public:
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     bool IsActive() const { return bActive || bReassessing; }
     float FailureMultiplier(int32 Slot) const;
+    /** Transient test override; the caller must be the MotionLab fixture. 0=combat, 1=no travel, 2=one step. */
+    int32 MotionLabPunchMode = 0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float RunSpeed = 600.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float MaxDuration = 2.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float ReplanInterval = .2f;

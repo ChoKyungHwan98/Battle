@@ -39,6 +39,14 @@ float OnePunchStep(float StartDistance, float AuthoredDistance, float RetreatSpe
     return FMath::Clamp(FMath::Max(AuthoredDistance, StartDistance - 255.f + Lead), 0.f, 145.f);
 }
 
+float ApplyLabPunchMode(bool bMotionLab, int32 Mode, float CombatStep, float Budget)
+{
+    if (!bMotionLab || Mode == 0) return CombatStep;
+    if (Mode == 1) return 0.f;
+    if (Mode == 2) return FMath::Clamp(Budget,0.f,145.f);
+    return CombatStep;
+}
+
 bool ChoosePostAttackProbe(int32 ActionId, float Distance, float Min, float Max, float Dot,
     bool bFreshRecovery, bool bCooldownReady, float Roll, float Chance)
 {
@@ -557,10 +565,13 @@ float UBossCombatIntentLibrary::OrdinaryPunchStepDistance(AActor* Boss, float Au
     if (Id != 0 && Id != 1) return FMath::Max(0.f, AuthoredDistance);
     const AActor* Player = Cast<AActor>(Object(Boss,TEXT("ObservedPlayer")));
     const float Retreat = IsValid(Player) ? FVector::DotProduct(Player->GetVelocity(), Boss->GetActorForwardVector()) : 0.f;
+    const auto* Intent = Boss->FindComponentByClass<UBossCombatIntentComponent>();
+    const bool bLab = Boss->GetWorld() && Boss->GetWorld()->GetMapName().Contains(TEXT("Lvl_BossMotionLab"));
+    const float Budget = static_cast<float>(FMath::Max(0.0,Number(Boss,TEXT("AttackAdvanceBudget"))));
     // Start distance is captured by eligibility. This pure result is stored once in BeginAttackStep;
     // ticking the attack uses the stored distance and original foot curve, not this query again.
-    return FMath::Min(OnePunchStep(Number(Boss,TEXT("AttackStartDistance")), AuthoredDistance, Retreat),
-        static_cast<float>(FMath::Max(0.0,Number(Boss,TEXT("AttackAdvanceBudget")))));
+    const float CombatStep = FMath::Min(OnePunchStep(Number(Boss,TEXT("AttackStartDistance")), AuthoredDistance, Retreat),Budget);
+    return ApplyLabPunchMode(bLab,Intent ? Intent->MotionLabPunchMode : 0,CombatStep,Budget);
 }
 
 bool UBossCombatIntentLibrary::CanStartPendingSlam(AActor* Boss)
@@ -713,6 +724,18 @@ bool UBossCombatIntentLibrary::ContinueTwoHitOrRecover(AActor* Boss)
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossLabPunchModeTest,"Battle.MotionLab.PunchModes",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBossLabPunchModeTest::RunTest(const FString& Parameters)
+{
+    TestEqual(TEXT("Combat mode preserves adaptive step"),ApplyLabPunchMode(true,0,80,145),80.f);
+    TestEqual(TEXT("Basic fixture suppresses body travel"),ApplyLabPunchMode(true,1,80,145),0.f);
+    TestEqual(TEXT("Single-step fixture requests full finite step"),ApplyLabPunchMode(true,2,80,145),145.f);
+    TestEqual(TEXT("Remaining budget still bounds forced step"),ApplyLabPunchMode(true,2,80,40),40.f);
+    TestEqual(TEXT("Forced mode cannot override fight-map movement"),ApplyLabPunchMode(false,1,80,145),80.f);
+    TestEqual(TEXT("Forced step cannot leak into fight map"),ApplyLabPunchMode(false,2,80,145),80.f);
+    return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossDesignerDistanceBandTest, "Battle.GOAP.DesignerDistanceBands",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FBossDesignerDistanceBandTest::RunTest(const FString& Parameters)

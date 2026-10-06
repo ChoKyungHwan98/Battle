@@ -48,7 +48,8 @@ private:
     TArray<FSoftObjectPath> FocusClips;
     TArray<FSoftObjectPath>* CurrentClips = nullptr;
     int32 ClipIndex = 0;
-    int32 DistanceIndex = 1;
+    int32 DistanceIndex = 0;
+    int32 PunchMode = 0;
     bool bShowHitboxes = true;
     bool bShowControls = false;
     bool bInitialized = false;
@@ -56,6 +57,8 @@ private:
     bool bManualActionActive = false;
     float ManualActionStartTime = 0.f;
     int32 ManualActionIndex = INDEX_NONE;
+    int32 ManualPunchMode = 0;
+    FVector ManualActionStartLocation = FVector::ZeroVector;
     float FirstHandContactAt = -1.f;
     float FirstWindowOpenAt = -1.f;
     float LastHandContactAt = -1.f;
@@ -92,9 +95,10 @@ private:
     void AdvanceChain();
     void ToggleHitboxes();
     void ToggleControls();
+    void TogglePunchMode();
     void SampleHandContact();
     void DrawDiagnostics() const;
     void DrawOverlay() const;
     void StopCurrentMotion() const;
-    void EnterReadyState() const;
+    bool EnterReadyState() const;
 };

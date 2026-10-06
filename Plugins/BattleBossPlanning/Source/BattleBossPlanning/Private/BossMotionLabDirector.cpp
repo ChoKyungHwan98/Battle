@@ -1,4 +1,5 @@
 #include "BossMotionLabDirector.h"
+#include "BossCombatIntentComponent.h"
 
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
@@ -27,7 +28,8 @@
 namespace
 {
 constexpr TCHAR ClipRoot[] = TEXT("/Game/ParagonCrunch/Characters/Heroes/Crunch/Animations/");
-constexpr float Distances[] = { 170.f, 230.f, 380.f, 700.f };
+constexpr float Distances[] = { 175.f, 300.f, 350.f, 400.f, 500.f, 1000.f };
+const TCHAR* const PunchModes[] = { TEXT("실전 자동"), TEXT("기본 제자리 · 몸 전진 없음"), TEXT("한 발 전진 · 최대 145cm") };
 const TCHAR* const FocusNames[] = {
     TEXT("Ability_Combo_01"), TEXT("Ability_Combo_01_Slow"), TEXT("Ability_Combo_01_Recovery"),
     TEXT("Ability_Combo_02"), TEXT("Ability_Combo_02_Slow"), TEXT("Ability_Combo_02_Recovery"),
@@ -60,6 +62,13 @@ bool ReadBool(const AActor* Actor, FName Name)
     if (const FBoolProperty* P = FindFProperty<FBoolProperty>(Actor->GetClass(), Name))
         return P->GetPropertyValue_InContainer(Actor);
     return false;
+}
+
+float PhysicalHandRadius(const AActor* Boss)
+{
+    const float Local = ReadNumber(Boss,TEXT("PhysicalHandRadiusLocal"));
+    // Same local radius * absolute actor X scale used by TracePhysicalLeft/Right.
+    return IsValid(Boss) && Local > 0.f ? Local * FMath::Abs(Boss->GetActorScale3D().X) : 52.f;
 }
 
 FName ReadName(const AActor* Actor, FName Name)
@@ -135,11 +144,13 @@ TSharedRef<SWidget> UBossMotionLabOverlay::RebuildWidget()
     ControlsText->SetFont(ControlsFont);
     ControlsText->SetColorAndOpacity(FSlateColor(FLinearColor(0.78f, 0.88f, 0.91f, 1.f)));
     ControlsText->SetText(FText::FromString(
-        TEXT("\n실전 행동  1 잽 · 2 후속 타격 · 3 어퍼컷\n")
+        TEXT("\n주먹 비교  L 전진 방식 변경 → 1 왼손 / 2 오른손\n")
+        TEXT("실전 행동  3 어퍼컷\n")
         TEXT("               4 휩쓸기 · 5 연계 · 6 가드 크래시\n")
         TEXT("               7 슈퍼맨 · 8 접근 · 9 점프\n")
         TEXT("               0 왼손 → 오른손 2연타\n")
-        TEXT("거리 설정  Z 170 · X 230 · V 380 · B 700 cm\n")
+        TEXT("거리 설정  Z 175 · X 300 · N 350 · V 400\n")
+        TEXT("               B 500 · M 1000 cm\n")
         TEXT("모션 비교  [ / ] 탐색 · O 미리보기 · C 전체 목록\n")
         TEXT("연결 비교  T/Y 콤보 회복 · U/I 대시 적중/실패\n")
         TEXT("표시  H 판정 영역 · Tab 조작법 닫기")));
@@ -200,10 +211,11 @@ void ABossMotionLabDirector::BindInput()
     Key(EKeys::R, &ABossMotionLabDirector::ResetFixture);
     Key(EKeys::H, &ABossMotionLabDirector::ToggleHitboxes);
     Key(EKeys::Tab, &ABossMotionLabDirector::ToggleControls);
+    Key(EKeys::L, &ABossMotionLabDirector::TogglePunchMode);
     for (const FKey K : {EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five,
         EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine, EKeys::Zero})
         InputComponent->BindKey(K, Press, this, &ABossMotionLabDirector::OnNumberKey);
-    for (const FKey K : {EKeys::Z, EKeys::X, EKeys::V, EKeys::B, EKeys::T, EKeys::Y, EKeys::U, EKeys::I})
+    for (const FKey K : {EKeys::Z, EKeys::X, EKeys::N, EKeys::V, EKeys::B, EKeys::M, EKeys::T, EKeys::Y, EKeys::U, EKeys::I})
         InputComponent->BindKey(K, Press, this, &ABossMotionLabDirector::OnFunctionKey);
 }
 
@@ -217,9 +229,9 @@ void ABossMotionLabDirector::OnNumberKey(FKey Key)
 
 void ABossMotionLabDirector::OnFunctionKey(FKey Key)
 {
-    const FKey Keys[] = {EKeys::Z, EKeys::X, EKeys::V, EKeys::B, EKeys::T, EKeys::Y, EKeys::U, EKeys::I};
+    const FKey Keys[] = {EKeys::Z, EKeys::X, EKeys::N, EKeys::V, EKeys::B, EKeys::M, EKeys::T, EKeys::Y, EKeys::U, EKeys::I};
     for (int32 Index = 0; Index < UE_ARRAY_COUNT(Keys); ++Index)
-        if (Key == Keys[Index]) { if (Index < 4) SetDistance(Index); else StartChain(Index - 4); return; }
+        if (Key == Keys[Index]) { if (Index < UE_ARRAY_COUNT(Distances)) SetDistance(Index); else StartChain(Index - UE_ARRAY_COUNT(Distances)); return; }
 }
 
 void ABossMotionLabDirector::InitializeFixture()
@@ -283,38 +295,27 @@ void ABossMotionLabDirector::SuppressAutonomousChoice() const
     }
 }
 
-void ABossMotionLabDirector::EnterReadyState() const
+bool ABossMotionLabDirector::EnterReadyState() const
 {
-    if (!IsValid(BossActor)) return;
+    if (!IsValid(BossActor)) return false;
     UFunction* Fn = BossActor->FindFunction(TEXT("TransitionBossState"));
-    if (!Fn) return;
+    if (!Fn) return false;
     FStructOnScope Params(Fn);
     const FStructProperty* CurrentStateProperty = FindFProperty<FStructProperty>(BossActor->GetClass(), TEXT("BossState"));
     const FGameplayTag CurrentState = CurrentStateProperty ?
         *CurrentStateProperty->ContainerPtrToValuePtr<FGameplayTag>(BossActor) : FGameplayTag();
-    int32 FirstTagOffset = MAX_int32;
-    for (TFieldIterator<FProperty> It(Fn); It; ++It)
-        if (const FStructProperty* TagProperty = CastField<FStructProperty>(*It))
-            if (TagProperty->HasAnyPropertyFlags(CPF_Parm) && TagProperty->Struct == FGameplayTag::StaticStruct())
-                FirstTagOffset = FMath::Min(FirstTagOffset, TagProperty->GetOffset_ForInternal());
-    for (TFieldIterator<FProperty> It(Fn); It; ++It)
-    {
-        FProperty* Property = *It;
-        if (!Property->HasAnyPropertyFlags(CPF_Parm | CPF_ReturnParm) || Property->HasAnyPropertyFlags(CPF_ReturnParm)) continue;
-        void* Value = Property->ContainerPtrToValuePtr<void>(Params.GetStructMemory());
-        if (FStructProperty* TagProperty = CastField<FStructProperty>(Property))
-        {
-            if (TagProperty->Struct == FGameplayTag::StaticStruct())
-            {
-                FGameplayTag* Tag = static_cast<FGameplayTag*>(Value);
-                *Tag = TagProperty->GetOffset_ForInternal() == FirstTagOffset ?
-                    FGameplayTag::RequestGameplayTag(TEXT("Boss.Combat.Ready")) : CurrentState;
-            }
-        }
-        else if (FStrProperty* StringProperty = CastField<FStrProperty>(Property))
-            StringProperty->SetPropertyValue(Value, TEXT("motion lab reset"));
-    }
+    const FGameplayTag Ready = FGameplayTag::RequestGameplayTag(TEXT("Boss.Combat.Ready"));
+    if (CurrentState.MatchesTagExact(Ready)) return true;
+    const FStructProperty* Expected = FindFProperty<FStructProperty>(Fn,TEXT("ExpectedState"));
+    const FStructProperty* Next = FindFProperty<FStructProperty>(Fn,TEXT("NewState"));
+    const FStrProperty* Reason = FindFProperty<FStrProperty>(Fn,TEXT("Reason"));
+    if (!Expected || !Next || !Reason || Expected->Struct != FGameplayTag::StaticStruct()
+        || Next->Struct != FGameplayTag::StaticStruct()) return false;
+    *Expected->ContainerPtrToValuePtr<FGameplayTag>(Params.GetStructMemory()) = CurrentState;
+    *Next->ContainerPtrToValuePtr<FGameplayTag>(Params.GetStructMemory()) = Ready;
+    Reason->SetPropertyValue_InContainer(Params.GetStructMemory(),TEXT("motion lab reset"));
     BossActor->ProcessEvent(Fn, Params.GetStructMemory());
+    return CurrentStateProperty && CurrentStateProperty->ContainerPtrToValuePtr<FGameplayTag>(BossActor)->MatchesTagExact(Ready);
 }
 
 void ABossMotionLabDirector::StopCurrentMotion() const
@@ -343,7 +344,10 @@ void ABossMotionLabDirector::ResetFixture()
     ClosestHandGap = BIG_NUMBER;
     SuppressAutonomousChoice();
     StopCurrentMotion();
-    EnterReadyState();
+    if (!EnterReadyState()) { LastResult = TEXT("초기화 거부 · Ready 복귀 실패"); return; }
+    WriteNumber(BossActor,TEXT("AttackStepDistance"),0);
+    if (FBoolProperty* Step = FindFProperty<FBoolProperty>(BossActor->GetClass(),TEXT("bAttackStepActive")))
+        Step->SetPropertyValue_InContainer(BossActor,false);
     if (FObjectProperty* Active = FindFProperty<FObjectProperty>(BossActor->GetClass(), TEXT("ActiveAction")))
         Active->SetObjectPropertyValue_InContainer(BossActor, nullptr);
     if (FBoolProperty* Open = FindFProperty<FBoolProperty>(BossActor->GetClass(), TEXT("bPhysicalStrikeOpen")))
@@ -372,8 +376,20 @@ void ABossMotionLabDirector::ResetFixture()
 
 void ABossMotionLabDirector::SetDistance(int32 Index)
 {
-    DistanceIndex = FMath::Clamp(Index, 0, 3);
+    DistanceIndex = FMath::Clamp(Index, 0, static_cast<int32>(UE_ARRAY_COUNT(Distances))-1);
     ResetFixture();
+}
+
+void ABossMotionLabDirector::TogglePunchMode()
+{
+    if (!bInitialized || bManualActionActive || !Chain.IsEmpty())
+    {
+        LastResult = TEXT("공격 종료 뒤 L키로 비교 방식을 바꾸세요");
+        return;
+    }
+    PunchMode = (PunchMode + 1) % UE_ARRAY_COUNT(PunchModes);
+    ResetFixture();
+    LastResult = FString::Printf(TEXT("비교 방식: %s · 1 왼손 / 2 오른손"),PunchModes[PunchMode]);
 }
 
 void ABossMotionLabDirector::RequestAction(int32 Index)
@@ -391,13 +407,24 @@ void ABossMotionLabDirector::RequestAction(int32 Index)
     DamageEventCount = 0;
     DamageTotal = 0.f;
     ManualActionIndex = Index;
+    ManualPunchMode = (Index == 0 || Index == 1) ? PunchMode : 0;
+    ManualActionStartLocation = BossActor->GetActorLocation();
     FirstHandContactAt = FirstWindowOpenAt = LastHandContactAt = ClosestHandGapAt = LastContactSampleAt = -1.f;
     ClosestHandGap = BIG_NUMBER;
     BossActor->SetActorTickEnabled(true);
     bManualActionActive = true;
     ManualActionStartTime = GetWorld()->GetTimeSeconds();
-    if (FFloatProperty* Distance = FindFProperty<FFloatProperty>(BossActor->GetClass(), TEXT("UtilityDistance")))
-        Distance->SetPropertyValue_InContainer(BossActor, FVector::Dist2D(BossActor->GetActorLocation(), PlayerActor->GetActorLocation()));
+    WriteNumber(BossActor,TEXT("UtilityDistance"),FVector::Dist2D(BossActor->GetActorLocation(),PlayerActor->GetActorLocation()));
+    WriteNumber(BossActor,TEXT("AttackStepDistance"),0);
+    UBossCombatIntentComponent* Intent = BossActor->FindComponentByClass<UBossCombatIntentComponent>();
+    if (!Intent)
+    {
+        Intent = NewObject<UBossCombatIntentComponent>(BossActor,TEXT("CombatIntent"));
+        BossActor->AddInstanceComponent(Intent);
+        Intent->RegisterComponent();
+        Intent->AddTickPrerequisiteActor(BossActor);
+    }
+    Intent->MotionLabPunchMode = (Index == 0 || Index == 1) ? PunchMode : 0;
     // A numbered lab request measures exactly one action. The boss's ordinary
     // follow-up chooser clears this flag at the end of that action.
     if (FBoolProperty* Followup = FindFProperty<FBoolProperty>(BossActor->GetClass(), TEXT("bInFollowup")))
@@ -414,7 +441,11 @@ void ABossMotionLabDirector::RequestAction(int32 Index)
                 if (FIntProperty* Int = CastField<FIntProperty>(*It)) { Int->SetPropertyValue_InContainer(Params.GetStructMemory(), Index); break; }
         BossActor->ProcessEvent(Fn, Params.GetStructMemory());
         if (ReadBool(BossActor, TEXT("bActionStartAllowed")))
+        {
             LastResult = FString::Printf(TEXT("%d키 실전 행동 실행 중"), (Index + 1) % 10);
+            UE_LOG(LogTemp,Display,TEXT("MotionLab request slot=%d punchMode=%d startDistance=%.1fcm"),
+                Index,ManualPunchMode,FVector::Dist2D(ManualActionStartLocation,PlayerActor->GetActorLocation()));
+        }
         else
         {
             const FStrProperty* Reason = FindFProperty<FStrProperty>(BossActor->GetClass(), TEXT("ActionStartReason"));
@@ -452,7 +483,7 @@ void ABossMotionLabDirector::PreviewSelected()
     if (!CurrentClips || CurrentClips->IsEmpty()) { LastResult = TEXT("Catalog empty"); return; }
     Chain.Reset();
     StopCurrentMotion();
-    EnterReadyState();
+    if (!EnterReadyState()) { LastResult = TEXT("미리보기 거부 · Ready 복귀 실패"); return; }
     PreviewSequence((*CurrentClips)[ClipIndex]);
 }
 
@@ -473,7 +504,7 @@ void ABossMotionLabDirector::StartChain(int32 Index)
 {
     Chain.Reset();
     StopCurrentMotion();
-    EnterReadyState();
+    if (!EnterReadyState()) { LastResult = TEXT("연결 비교 거부 · Ready 복귀 실패"); return; }
     auto Add = [this](const TCHAR* Name) { Chain.Add(ClipPath(Name)); };
     if (Index == 0) { Add(TEXT("Ability_Combo_01_Slow")); Add(TEXT("Ability_Combo_01_Recovery")); }
     if (Index == 1) { Add(TEXT("Ability_Combo_02_Slow")); Add(TEXT("Ability_Combo_02_Recovery")); }
@@ -508,7 +539,7 @@ void ABossMotionLabDirector::ToggleControls()
 
 void ABossMotionLabDirector::SampleHandContact()
 {
-    if (!bManualActionActive || ManualActionIndex != 0 || !IsValid(BossActor) || !PlayerActor.IsValid()) return;
+    if (!bManualActionActive || (ManualActionIndex != 0 && ManualActionIndex != 1) || !IsValid(BossActor) || !PlayerActor.IsValid()) return;
     const ACharacter* Boss = Cast<ACharacter>(BossActor);
     const ACharacter* Player = Cast<ACharacter>(PlayerActor.Get());
     if (!Boss || !Player) return;
@@ -517,10 +548,12 @@ void ABossMotionLabDirector::SampleHandContact()
     const FVector Axis = Capsule->GetUpVector();
     const float Radius = Capsule->GetScaledCapsuleRadius();
     const float InnerHalf = Capsule->GetScaledCapsuleHalfHeight() - Radius;
-    const FVector Hand = Boss->GetMesh()->GetSocketLocation(TEXT("hand_l"));
-    const float Gap = FMath::PointDistToSegment(Hand, Center - Axis * InnerHalf, Center + Axis * InnerHalf) - Radius - 52.f;
-    const FVector OtherHand = Boss->GetMesh()->GetSocketLocation(TEXT("hand_r"));
-    const float OtherGap = FMath::PointDistToSegment(OtherHand, Center - Axis * InnerHalf, Center + Axis * InnerHalf) - Radius - 52.f;
+    const FName HandName(ManualActionIndex == 0 ? TEXT("hand_l") : TEXT("hand_r"));
+    const FVector Hand = Boss->GetMesh()->GetSocketLocation(HandName);
+    const float HandRadius = PhysicalHandRadius(Boss);
+    const float Gap = FMath::PointDistToSegment(Hand, Center - Axis * InnerHalf, Center + Axis * InnerHalf) - Radius - HandRadius;
+    const FVector OtherHand = Boss->GetMesh()->GetSocketLocation(ManualActionIndex == 0 ? TEXT("hand_r") : TEXT("hand_l"));
+    const float OtherGap = FMath::PointDistToSegment(OtherHand, Center - Axis * InnerHalf, Center + Axis * InnerHalf) - Radius - HandRadius;
     const float Elapsed = GetWorld()->GetTimeSeconds() - ManualActionStartTime;
     if (Gap < ClosestHandGap) { ClosestHandGap = Gap; ClosestHandGapAt = Elapsed; }
     if (Gap <= 0.f)
@@ -536,9 +569,10 @@ void ABossMotionLabDirector::SampleHandContact()
         const FObjectProperty* MontageProperty = FindFProperty<FObjectProperty>(BossActor->GetClass(), TEXT("AttackMontage"));
         const UAnimMontage* Montage = MontageProperty ? Cast<UAnimMontage>(MontageProperty->GetObjectPropertyValue_InContainer(BossActor)) : nullptr;
         const float MontageTime = Anim && Montage ? Anim->Montage_GetPosition(Montage) : -1.f;
-        UE_LOG(LogTemp, Display, TEXT("MotionLab action1 t=%.3f montage=%.3f action=%d leftGap=%.1fcm rightGap=%.1fcm left=(%.1f,%.1f,%.1f) target=(%.1f,%.1f,%.1f) window=%d damageEvents=%d"),
-            Elapsed, MontageTime, ReadActiveActionId(BossActor), Gap, OtherGap,
-            Hand.X, Hand.Y, Hand.Z, Center.X, Center.Y, Center.Z, bOpen ? 1 : 0, DamageEventCount);
+        UE_LOG(LogTemp, Display, TEXT("MotionLab punch t=%.3f montage=%.3f action=%d hand=%s mode=%d gap=%.1fcm otherGap=%.1fcm handPos=(%.1f,%.1f,%.1f) target=(%.1f,%.1f,%.1f) window=%d damageEvents=%d requestedStep=%.1fcm bodyTravel=%.1fcm"),
+            Elapsed, MontageTime, ReadActiveActionId(BossActor),*HandName.ToString(),ManualPunchMode, Gap, OtherGap,
+            Hand.X, Hand.Y, Hand.Z, Center.X, Center.Y, Center.Z, bOpen ? 1 : 0, DamageEventCount,
+            ReadNumber(BossActor,TEXT("AttackStepDistance")),FVector::Dist2D(BossActor->GetActorLocation(),ManualActionStartLocation));
         LastContactSampleAt = Elapsed;
     }
 }
@@ -558,7 +592,7 @@ void ABossMotionLabDirector::DrawDiagnostics() const
     for (const FName Hand : {FName(TEXT("hand_l")), FName(TEXT("hand_r"))})
     {
         const FVector Position = Boss->GetMesh()->GetSocketLocation(Hand);
-        DrawDebugSphere(GetWorld(), Position, 52.f, 12,
+        DrawDebugSphere(GetWorld(), Position, PhysicalHandRadius(Boss), 12,
             bCanDamage && Hand == ActiveHand ? FColor::Red : FColor::Yellow, false, 0.f, 0, 2.f);
     }
 }
@@ -567,7 +601,7 @@ void ABossMotionLabDirector::DrawOverlay() const
 {
     if (!GEngine) return;
     const FString Clip = CurrentClips && CurrentClips->IsValidIndex(ClipIndex) ? (*CurrentClips)[ClipIndex].GetAssetName() : TEXT("none");
-    const TCHAR* Names[] = { TEXT("왼손 잽"), TEXT("후속 타격"), TEXT("어퍼컷"), TEXT("양손 휩쓸기"),
+    const TCHAR* Names[] = { TEXT("왼손 휘두르기"), TEXT("오른손 휘두르기"), TEXT("어퍼컷"), TEXT("양손 휩쓸기"),
         TEXT("잽·잽·훅"), TEXT("가드 크래시"), TEXT("슈퍼맨 펀치"), TEXT("접근"), TEXT("점프 내려찍기"), TEXT("왼손 → 오른손 2연타") };
     const FString Action = ManualActionIndex >= 0 && ManualActionIndex < UE_ARRAY_COUNT(Names) ?
         FString::Printf(TEXT("%d키  %s"), (ManualActionIndex + 1) % 10, Names[ManualActionIndex]) : TEXT("행동 선택 대기");
@@ -575,18 +609,21 @@ void ABossMotionLabDirector::DrawOverlay() const
         FString::Printf(TEXT("%.2f초"), FirstHandContactAt) : TEXT("없음");
     const FString Window = FirstWindowOpenAt >= 0.f ?
         FString::Printf(TEXT("%.2f초"), FirstWindowOpenAt) : TEXT("없음");
-    const FString ContactLine = ManualActionIndex == 0
-        ? FString::Printf(TEXT("손 접촉  %s  ·  판정 시작  %s\n"), *Contact, *Window)
+    const bool bPunch = ManualActionIndex == 0 || ManualActionIndex == 1;
+    const FString ContactLine = bPunch
+        ? FString::Printf(TEXT("본 테스트: %s\n몸 전진  %.0f cm · 요청  %.0f cm\n손 접촉  %s  ·  판정 시작  %s\n"),
+            PunchModes[ManualPunchMode],IsValid(BossActor) ? FVector::Dist2D(BossActor->GetActorLocation(),ManualActionStartLocation) : 0.f,
+            ReadNumber(BossActor,TEXT("AttackStepDistance")),*Contact,*Window)
         : TEXT("");
     const FString Text = FString::Printf(
-        TEXT("\n%s\n")
+        TEXT("\n주먹 방식: %s  [L 변경]\n%s\n")
         TEXT("거리  %.0f cm  ·  타격 창  %s\n")
         TEXT("피해  %d회 / %.0f  ·  적중  %s\n")
         TEXT("%s")
         TEXT("\n미리보기 선택 %d/%d  %s\n")
         TEXT("보스 HP  %.0f  ·  플레이어 불사\n")
         TEXT("\n%s\n"),
-        *Action,
+        PunchModes[PunchMode],*Action,
         IsValid(BossActor) && PlayerActor.IsValid() ? FVector::Dist2D(BossActor->GetActorLocation(), PlayerActor->GetActorLocation()) : -1.f,
         ReadBool(BossActor, TEXT("bPhysicalStrikeOpen"))
             ? (ReadBool(BossActor, TEXT("bPhysicalStrikeHit")) ? TEXT("소진") : TEXT("열림"))
@@ -623,7 +660,7 @@ void ABossMotionLabDirector::Tick(float DeltaSeconds)
         {
             bManualActionActive = false;
             BossActor->SetActorTickEnabled(false);
-            LastResult = ManualActionIndex == 0 && ClosestHandGap < BIG_NUMBER * 0.5f
+            LastResult = (ManualActionIndex == 0 || ManualActionIndex == 1) && ClosestHandGap < BIG_NUMBER * 0.5f
                 ? FString::Printf(TEXT("행동 완료 · 최근접 %.0f cm (%.2f초)"), ClosestHandGap, ClosestHandGapAt)
                 : TEXT("행동 완료");
         }
@@ -636,7 +673,13 @@ void ABossMotionLabDirector::Tick(float DeltaSeconds)
         if (State && !State->MatchesTagExact(FGameplayTag::RequestGameplayTag(TEXT("Boss.Combat.Ready"))))
         {
             StopCurrentMotion();
-            EnterReadyState();
+            if (!EnterReadyState())
+            {
+                LastResult = TEXT("Ready 복귀 실패 · 현재 상태를 확인하세요");
+                DrawDiagnostics();
+                DrawOverlay();
+                return;
+            }
         }
         if (FObjectProperty* Active = FindFProperty<FObjectProperty>(BossActor->GetClass(), TEXT("ActiveAction")))
             Active->SetObjectPropertyValue_InContainer(BossActor, nullptr);
