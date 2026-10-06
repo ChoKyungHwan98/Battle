@@ -1,5 +1,9 @@
 # Battle workspace
 
+- UE5.8 EulerTransform controls require ControlRigSequencerLibrary.set_local_control_rig_euler_transform(s); SetLocalControlRigTransform silently skips them. Verify actual channel key counts, and unwrap equivalent Euler representations before interpolating across ±180°.
+- Exporting an open Sequencer spawnable through SequencerTools.export_anim_sequence can report no skeletal mesh. Use the reflected ControlRigEditor.ControlRigSequencerEditorLibrary ExportAnimSequenceFromSequencer via CDO.call_method(function_name, argument_tuple); set AnimSeqExportOption.custom_display_rate as well as custom_frame_rate when exporting custom frame ranges.
+- VibeUE GetTotalRootMotion/GetRootMotionAtTime build an extraction context without a time range and can return identity for valid moving root keys in UE5.8. Verify raw root keys with root extraction disabled temporarily and measure actual capsule displacement in PIE; restore the original settings afterwards.
+
 - Crunch animation source policy: never use Mixamo, external mocap, or other-character animation clips. Use Crunch's own original clips or hand-author new animation on Crunch's skeleton; the FightAnimations/UAF libraries are not permitted Crunch motion sources.
 
 - A 60fps authored sequence inheriting 30fps PlatformTargetFrameRate must end on an even authored frame; a half-frame compression endpoint can assert in AnimCompressionTypes.cpp. Current Crunch hand traces use hand_l/r socket centers, so archived hand_slide capsule fixtures must not predict current reach.
