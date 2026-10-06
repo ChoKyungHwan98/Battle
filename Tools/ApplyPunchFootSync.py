@@ -204,6 +204,9 @@ def qa():
 
 def apply():
     assert not vibeue.exec_tool('EditorToolset.EditorAppToolset','IsPIERunning')
+    if any(n.node_title=='Designer bands: snapshot single punch step once'
+           for n in S.get_nodes_in_graph(B,'BeginAttackStep',0,'',False)):
+        raise RuntimeError('Historical 350cm authoring: use ApplyDesignerDistanceBands.py for the current designer distance policy. inspect() remains read-only.')
     curves={}
     for side in ['Left','Right']:
         card=H.asset(CARDS+'DA_Attack_'+side)

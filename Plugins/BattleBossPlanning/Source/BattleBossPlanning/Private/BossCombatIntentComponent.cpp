@@ -14,9 +14,31 @@
 #include "Animation/AnimMontage.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "Kismet/GameplayStatics.h"
+#include <limits>
 
 namespace
 {
+bool PendingSlamRange(bool bPending, bool bPhaseTwo, float Distance, float Min, float Max)
+{
+    return bPending && bPhaseTwo && FMath::IsFinite(Distance) && Distance >= Min && Distance <= Max;
+}
+float DistanceBandMultiplier(int32 Id, double Distance)
+{
+    // Ordinary punches can prepare a short entry in the 400..500 gap, never at dash range.
+    return (Id == 0 || Id == 1 || Id == 9) && Distance >= 500.0 ? 0.f : 1.f;
+}
+
+float OnePunchStep(float StartDistance, float AuthoredDistance, float RetreatSpeed)
+{
+    if (!FMath::IsFinite(StartDistance) || !FMath::IsFinite(AuthoredDistance)
+        || !FMath::IsFinite(RetreatSpeed)) return 0.f;
+    if (StartDistance < 300.f) return FMath::Clamp(AuthoredDistance, 0.f, 145.f);
+    // Designer's single-step band is 300..400cm. Do not add steps or change tempo.
+    const float Lead = FMath::Clamp(RetreatSpeed, 0.f, 450.f) * .1f;
+    return FMath::Clamp(FMath::Max(AuthoredDistance, StartDistance - 255.f + Lead), 0.f, 145.f);
+}
+
 bool ChoosePostAttackProbe(int32 ActionId, float Distance, float Min, float Max, float Dot,
     bool bFreshRecovery, bool bCooldownReady, float Roll, float Chance)
 {
@@ -515,8 +537,40 @@ bool UBossCombatIntentLibrary::IsAttackIntentActive(AActor* Boss)
 float UBossCombatIntentLibrary::AdjustIntentCandidate(AActor* Boss, int32 CandidateSlot, float Score)
 {
     if (!IsValid(Boss) || Score <= 0.f) return 0.f;
+    const FArrayProperty* Cards = FindFProperty<FArrayProperty>(Boss->GetClass(), TEXT("Actions"));
+    const FObjectPropertyBase* CardType = Cards ? CastField<FObjectPropertyBase>(Cards->Inner) : nullptr;
+    if (CardType)
+    {
+        FScriptArrayHelper Values(Cards, Cards->ContainerPtrToValuePtr<void>(Boss));
+        if (!Values.IsValidIndex(CandidateSlot)) return 0.f;
+        const UObject* Card = CardType->GetObjectPropertyValue(Values.GetRawPtr(CandidateSlot));
+        Score *= DistanceBandMultiplier(static_cast<int32>(Number(Card,TEXT("ActionId"),-1)), Number(Boss,TEXT("UtilityDistance")));
+    }
     if (const auto* Intent = Boss->FindComponentByClass<UBossCombatIntentComponent>()) Score *= Intent->FailureMultiplier(CandidateSlot);
     return Score;
+}
+
+float UBossCombatIntentLibrary::OrdinaryPunchStepDistance(AActor* Boss, float AuthoredDistance)
+{
+    if (!IsValid(Boss) || !Flag(Boss,TEXT("bPunchFootSync"))) return FMath::Max(0.f, AuthoredDistance);
+    const int32 Id = static_cast<int32>(Number(Object(Boss,TEXT("ActiveAction")),TEXT("ActionId"),-1));
+    if (Id != 0 && Id != 1) return FMath::Max(0.f, AuthoredDistance);
+    const AActor* Player = Cast<AActor>(Object(Boss,TEXT("ObservedPlayer")));
+    const float Retreat = IsValid(Player) ? FVector::DotProduct(Player->GetVelocity(), Boss->GetActorForwardVector()) : 0.f;
+    // Start distance is captured by eligibility. This pure result is stored once in BeginAttackStep;
+    // ticking the attack uses the stored distance and original foot curve, not this query again.
+    return FMath::Min(OnePunchStep(Number(Boss,TEXT("AttackStartDistance")), AuthoredDistance, Retreat),
+        static_cast<float>(FMath::Max(0.0,Number(Boss,TEXT("AttackAdvanceBudget")))));
+}
+
+bool UBossCombatIntentLibrary::CanStartPendingSlam(AActor* Boss)
+{
+    if (!IsValid(Boss)) return false;
+    const AActor* Player = Cast<AActor>(Object(Boss,TEXT("ObservedPlayer")));
+    if (!IsValid(Player)) Player = UGameplayStatics::GetPlayerCharacter(Boss,0);
+    if (!IsValid(Player)) return false;
+    return PendingSlamRange(Flag(Boss,TEXT("bFirstSlamPending")),Flag(Boss,TEXT("bPhaseTwo")),
+        FVector::Dist2D(Boss->GetActorLocation(),Player->GetActorLocation()),1000.f,5000.f);
 }
 
 FString UBossCombatIntentLibrary::DescribeCombatDebug(AActor* Boss)
@@ -612,7 +666,7 @@ void UBossCombatIntentLibrary::FinalizeIntentScores(AActor* Boss)
         Approach.Add(Number(ActionType->GetObjectPropertyValue(Cards.GetRawPtr(I)), TEXT("ActionId"), -1) == 7);
     }
     const double Total = FinalizeWeights(Weights, Approach,
-        Number(Boss, TEXT("UtilityDistance")) <= Number(Boss, TEXT("IntentSelectionMaxDistance"), 650));
+        Number(Boss, TEXT("UtilityDistance")) < 500.0);
     FString Summary;
     for (int32 I = 0; I < Values.Num(); ++I)
     {
@@ -659,6 +713,24 @@ bool UBossCombatIntentLibrary::ContinueTwoHitOrRecover(AActor* Boss)
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossDesignerDistanceBandTest, "Battle.GOAP.DesignerDistanceBands",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBossDesignerDistanceBandTest::RunTest(const FString& Parameters)
+{
+    TestEqual(TEXT("Close punch preserves source step"), OnePunchStep(175,66,450), 66.f);
+    TestEqual(TEXT("400cm has finite one-step travel"), OnePunchStep(400,66,0),145.f);
+    TestEqual(TEXT("Retreat cannot extend step past cap"), OnePunchStep(400,66,650),145.f);
+    TestEqual(TEXT("Invalid geometry cannot move"), OnePunchStep(std::numeric_limits<float>::quiet_NaN(),66,0),0.f);
+    TestEqual(TEXT("Ordinary candidate allowed below dash boundary"), DistanceBandMultiplier(0,499),1.f);
+    TestEqual(TEXT("500cm stops ordinary candidate"), DistanceBandMultiplier(0,500),0.f);
+    TestEqual(TEXT("500cm stops two-hit entry"), DistanceBandMultiplier(9,500),0.f);
+    TestEqual(TEXT("Dash candidate retains its own eligibility"), DistanceBandMultiplier(6,500),1.f);
+    TestFalse(TEXT("Phase one never executes pending slam"), PendingSlamRange(true,false,1000,1000,5000));
+    TestFalse(TEXT("Close phase entry does not force jump"), PendingSlamRange(true,true,175,1000,5000));
+    TestFalse(TEXT("Below jump band remains normal combat"), PendingSlamRange(true,true,999,1000,5000));
+    TestTrue(TEXT("Phase two 1000cm can start pending jump"), PendingSlamRange(true,true,1000,1000,5000));
+    return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossPostAttackProbeTest, "Battle.GOAP.PostAttackProbe",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FBossPostAttackProbeTest::RunTest(const FString& Parameters)

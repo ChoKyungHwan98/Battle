@@ -1,5 +1,8 @@
 # Crunch 보스 전투 AI 설계
 
+> **현재 거리별 실행은 [사용자 거리 규칙](docs/portfolio/crunch_designer_distance_bands_20261006.md)을 최우선한다.**
+> 175cm 근접, 300~400cm 한 발 주먹, 500cm부터 슈퍼맨, 1000cm부터 2페이즈 점프다.
+
 > 2026-10-06 사용자 플레이 평가로 중거리 공격 경험의 실패를 확인했다.
 > 400~500cm에서 발을 내디디며 공격을 시작하는 요구는
 > [중거리 재설계](docs/portfolio/crunch_midrange_strike_redesign_20261006.md)를 우선한다.

@@ -62,6 +62,9 @@ class BATTLEBOSSPLANNING_API UBossCombatIntentLibrary : public UBlueprintFunctio
 public:
     UFUNCTION(BlueprintCallable, Category="Boss|Intent") static void BeginSelectedAttackIntent(AActor* Boss);
     UFUNCTION(BlueprintPure, Category="Boss|Intent") static FString DescribeCombatDebug(AActor* Boss);
+    /** One finite step in an ordinary punch; sampled once when the step opens. */
+    UFUNCTION(BlueprintPure, Category="Boss|Intent") static float OrdinaryPunchStepDistance(AActor* Boss, float AuthoredDistance);
+    UFUNCTION(BlueprintPure, Category="Boss|Intent") static bool CanStartPendingSlam(AActor* Boss);
     UFUNCTION(BlueprintCallable, Category="Boss|Intent") static void RecordAttackRecoveryEnd(AActor* Boss);
     UFUNCTION(BlueprintPure, Category="Boss|Intent") static bool IsAttackIntentActive(AActor* Boss);
     UFUNCTION(BlueprintPure, Category="Boss|Intent") static float AdjustIntentCandidate(AActor* Boss, int32 Slot, float Score);
