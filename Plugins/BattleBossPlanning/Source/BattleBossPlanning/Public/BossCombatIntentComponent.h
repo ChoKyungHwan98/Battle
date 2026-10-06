@@ -12,6 +12,7 @@ class BATTLEBOSSPLANNING_API UBossCombatIntentComponent : public UActorComponent
 public:
     UBossCombatIntentComponent();
     void BeginSelectedIntent();
+    void RecordAttackRecoveryEnd();
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     bool IsActive() const { return bActive || bReassessing; }
@@ -24,11 +25,13 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float ReassessDuration = .65f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float SideEntryAngle = 20.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float SideEntrySpeed = 220.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float PostAttackProbeChance = .25f;
     UPROPERTY(BlueprintReadOnly, Category="Boss|Intent") FString Status;
 private:
     void Advance();
     void Finish(bool bAttack, const FString& Reason, bool bCountFailure = true);
     void TickReassessment(float DeltaTime);
+    void StartSideMove(const FVector& Destination, bool bLeft, bool bProbe);
     void Publish(const FString& Phase, const FString& Reason);
     bool ReachableCenter(const FVector& Desired, FVector& Center) const;
     TWeakObjectPtr<UObject> Action;
@@ -42,11 +45,14 @@ private:
     int32 ConsecutiveEntryFailures = 0;
     double LastEntryFailureAt = -1.0;
     double ReassessUntil = 0.0;
+    double PostAttackDecisionUntil = 0.0;
     FVector SideEntryGoal = FVector::ZeroVector;
     bool bActive = false;
     bool bReassessing = false;
     bool bSideEntryActive = false;
     bool bSideEntryUsed = false;
+    bool bSideMoveIsProbe = false;
+    bool bPostProbeRequested = false;
 };
 
 UCLASS()
@@ -55,6 +61,7 @@ class BATTLEBOSSPLANNING_API UBossCombatIntentLibrary : public UBlueprintFunctio
     GENERATED_BODY()
 public:
     UFUNCTION(BlueprintCallable, Category="Boss|Intent") static void BeginSelectedAttackIntent(AActor* Boss);
+    UFUNCTION(BlueprintCallable, Category="Boss|Intent") static void RecordAttackRecoveryEnd(AActor* Boss);
     UFUNCTION(BlueprintPure, Category="Boss|Intent") static bool IsAttackIntentActive(AActor* Boss);
     UFUNCTION(BlueprintPure, Category="Boss|Intent") static float AdjustIntentCandidate(AActor* Boss, int32 Slot, float Score);
     /** Called after every candidate has been scored, before the weighted draw. */

@@ -17,6 +17,15 @@
 
 namespace
 {
+bool ChoosePostAttackProbe(int32 ActionId, float Distance, float Min, float Max, float Dot,
+    bool bFreshRecovery, bool bCooldownReady, float Roll, float Chance)
+{
+    // Keep reactive/special attacks direct; only ordinary boxing preparations vary.
+    return bFreshRecovery && bCooldownReady && (ActionId == 0 || ActionId == 1 || ActionId == 9)
+        && Distance >= FMath::Max(225.f, Min + 20.f) && Distance <= Max && Dot >= .5f
+        && Roll >= 0.f && Roll < FMath::Clamp(Chance, 0.f, 1.f);
+}
+
 FVector LateralEntryGoal(const FVector& Boss, const FVector& Player, float Range, float Degrees)
 {
     FVector Goal = Player + (Boss - Player).GetSafeNormal2D().RotateAngleAxis(Degrees, FVector::UpVector) * Range;
@@ -153,6 +162,15 @@ void UBossCombatIntentComponent::BeginSelectedIntent()
     PreviousSpeed = Boss->GetCharacterMovement()->MaxWalkSpeed;
     const float Distance = FVector::Dist2D(Boss->GetActorLocation(), Target->GetActorLocation());
     const float StartMax = Number(Action.Get(), TEXT("MaxDistance"));
+    const float Facing = FVector::DotProduct(Boss->GetActorForwardVector(),
+        (Target->GetActorLocation()-Boss->GetActorLocation()).GetSafeNormal2D());
+    const bool bFreshRecovery = Flag(Boss, TEXT("bPostAttackProbePending")) && Now <= PostAttackDecisionUntil;
+    bPostProbeRequested = ChoosePostAttackProbe(static_cast<int32>(Number(Action.Get(), TEXT("ActionId"), -1)),
+        Distance, Number(Action.Get(), TEXT("MinDistance")), StartMax, Facing, bFreshRecovery,
+        Now >= Number(Boss, TEXT("GoapProbeCooldownUntil")), FMath::FRand(), PostAttackProbeChance);
+    // Consume once after the Utility choice, never once per scoring tick.
+    SetFlag(Boss, TEXT("bPostAttackProbePending"), false);
+    PostAttackDecisionUntil = 0;
     // Once entry is needed, go inside the start boundary rather than stopping
     // at its outer edge. Already-close attacks never back away to this target.
     GoalMaxDistance = Distance > StartMax ? FMath::Max(static_cast<float>(Number(Action.Get(), TEXT("MinDistance"))) + 20.f, StartMax - 40.f) : StartMax;
@@ -173,6 +191,16 @@ void UBossCombatIntentComponent::BeginSelectedIntent()
     Publish(TEXT("position"), TEXT("선택한 공격을 유지하며 진입"));
     Invoke(Boss, TEXT("RecordCombatQA"), TEXT("intent_begin"));
     Advance();
+}
+
+void UBossCombatIntentComponent::RecordAttackRecoveryEnd()
+{
+    AActor* Boss = GetOwner();
+    if (IsActive() || !StateIs(Boss, TEXT("Boss.Combat.Ready"))) return;
+    const int32 FinishedId = static_cast<int32>(Number(Object(Boss, TEXT("ActiveAction")), TEXT("ActionId"), -1));
+    const bool bOrdinaryCombatEnd = (FinishedId >= 0 && FinishedId <= 6) || FinishedId == 9;
+    SetFlag(Boss, TEXT("bPostAttackProbePending"), bOrdinaryCombatEnd);
+    PostAttackDecisionUntil = bOrdinaryCombatEnd ? GetWorld()->GetTimeSeconds() + 2.0 : 0.0;
 }
 
 bool UBossCombatIntentComponent::ReachableCenter(const FVector& Desired, FVector& Center) const
@@ -222,7 +250,7 @@ void UBossCombatIntentComponent::Advance()
         }
         bSideEntryActive = false;
         if (Controller) Controller->StopMovement();
-        Invoke(Boss, TEXT("RecordCombatQA"), TEXT("intent_side_arrived"));
+        Invoke(Boss, TEXT("RecordCombatQA"), bSideMoveIsProbe ? TEXT("intent_probe_arrived") : TEXT("intent_side_arrived"));
     }
     const FVector Delta = Player->GetActorLocation() - Boss->GetActorLocation();
     const float Distance = Delta.Size2D();
@@ -230,6 +258,37 @@ void UBossCombatIntentComponent::Advance()
     const float Min = Number(Action.Get(), TEXT("MinDistance"));
     const float MinimumDot = Number(Boss, TEXT("AttackStartMinDot"), .5);
     SetNumber(Boss, TEXT("UtilityDistance"), Distance);
+    if (bPostProbeRequested)
+    {
+        bPostProbeRequested = false;
+        FVector LeftProbe, RightProbe;
+        const auto ProbeOpen = [&](float Degrees, FVector& Destination)
+        {
+            if (!ReachableCenter(LateralEntryGoal(Boss->GetActorLocation(), Player->GetActorLocation(), Distance, Degrees), Destination)) return false;
+            const float Range = FVector::Dist2D(Destination, Player->GetActorLocation());
+            return Range >= Min && Range <= GoalMaxDistance;
+        };
+        const float Angle = FMath::Clamp(SideEntryAngle, 5.f, 35.f);
+        bool bLeftOpen = ProbeOpen(Angle, LeftProbe), bRightOpen = ProbeOpen(-Angle, RightProbe);
+        // When both paths are valid, avoid a permanently preferred orbit direction.
+        if (bLeftOpen && bRightOpen)
+        {
+            if (FMath::RandBool()) bLeftOpen = false;
+            else bRightOpen = false;
+        }
+        const auto Probe = UBossPositionPlanner::PlanAttackPosition(Distance, Facing, Min, GoalMaxDistance, MinimumDot,
+            false, false, bLeftOpen, bRightOpen, true, SideEntrySpeed);
+        if (Probe.bFound && (Probe.FirstAction == EBossPositionAction::OrbitLeft || Probe.FirstAction == EBossPositionAction::OrbitRight))
+        {
+            const bool bLeft = Probe.FirstAction == EBossPositionAction::OrbitLeft;
+            SetNumber(Boss, TEXT("GoapFirstAction"), static_cast<int32>(Probe.FirstAction));
+            StartSideMove(bLeft ? LeftProbe : RightProbe, bLeft, true);
+            return;
+        }
+        // A blocked optional probe must not discard an otherwise valid attack.
+        Publish(TEXT("position"), TEXT("옆걸음 여유가 없어 선택한 공격을 바로 준비"));
+        Invoke(Boss, TEXT("RecordCombatQA"), TEXT("intent_probe_skipped"));
+    }
     if (Distance >= Min && Distance <= GoalMaxDistance && Facing >= MinimumDot)
     {
         Finish(true, TEXT("선택한 공격을 시작할 위치 도착"));
@@ -279,17 +338,28 @@ void UBossCombatIntentComponent::Advance()
     }
     else if (Plan.FirstAction == EBossPositionAction::OrbitLeft || Plan.FirstAction == EBossPositionAction::OrbitRight)
     {
-        if (!Controller) { Finish(false, TEXT("측면 이동 제어기가 없음")); return; }
-        SideEntryGoal = Plan.FirstAction == EBossPositionAction::OrbitLeft ? LeftEntry : RightEntry;
-        Boss->GetCharacterMovement()->MaxWalkSpeed = FMath::Max(1.f, SideEntrySpeed);
-        const FVector FloorDestination = SideEntryGoal - FVector(0.f, 0.f, Boss->GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
-        const auto Request = Controller->MoveToLocation(FloorDestination, 10.f, false, true, true, false, nullptr, false);
-        if (Request == EPathFollowingRequestResult::Failed) { Finish(false, TEXT("측면 진입 이동 요청 실패")); return; }
-        bSideEntryActive = bSideEntryUsed = true;
-        Publish(TEXT("side_entry"), Plan.FirstAction == EBossPositionAction::OrbitLeft
-            ? TEXT("정면 길이 막혀 왼쪽 공격 자리로 이동") : TEXT("정면 길이 막혀 오른쪽 공격 자리로 이동"));
-        Invoke(Boss, TEXT("RecordCombatQA"), TEXT("intent_side_begin"));
+        const bool bLeft = Plan.FirstAction == EBossPositionAction::OrbitLeft;
+        StartSideMove(bLeft ? LeftEntry : RightEntry, bLeft, false);
     }
+}
+
+void UBossCombatIntentComponent::StartSideMove(const FVector& Destination, bool bLeft, bool bProbe)
+{
+    ACharacter* Boss = Cast<ACharacter>(GetOwner());
+    AAIController* Controller = Boss ? Cast<AAIController>(Boss->GetController()) : nullptr;
+    if (!Controller) { Finish(false, TEXT("측면 이동 제어기가 없음")); return; }
+    SideEntryGoal = Destination;
+    Boss->GetCharacterMovement()->MaxWalkSpeed = FMath::Max(1.f, SideEntrySpeed);
+    const FVector FloorDestination = SideEntryGoal - FVector(0.f, 0.f, Boss->GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+    const auto Request = Controller->MoveToLocation(FloorDestination, 10.f, false, true, true, false, nullptr, false);
+    if (Request == EPathFollowingRequestResult::Failed) { Finish(false, TEXT("측면 진입 이동 요청 실패")); return; }
+    bSideEntryActive = bSideEntryUsed = true;
+    bSideMoveIsProbe = bProbe;
+    if (bProbe) SetNumber(Boss, TEXT("GoapProbeCooldownUntil"), GetWorld()->GetTimeSeconds() + 4.0);
+    Publish(bProbe ? TEXT("probe") : TEXT("side_entry"), bProbe
+        ? (bLeft ? TEXT("다음 공격 유지: 왼쪽으로 짧게 자리를 바꿈") : TEXT("다음 공격 유지: 오른쪽으로 짧게 자리를 바꿈"))
+        : (bLeft ? TEXT("정면 길이 막혀 왼쪽 공격 자리로 이동") : TEXT("정면 길이 막혀 오른쪽 공격 자리로 이동")));
+    Invoke(Boss, TEXT("RecordCombatQA"), bProbe ? TEXT("intent_probe_begin") : TEXT("intent_side_begin"));
 }
 
 void UBossCombatIntentComponent::Finish(bool bAttack, const FString& Reason, bool bCountFailure)
@@ -416,6 +486,20 @@ void UBossCombatIntentLibrary::BeginSelectedAttackIntent(AActor* Boss)
     Intent->BeginSelectedIntent();
 }
 
+void UBossCombatIntentLibrary::RecordAttackRecoveryEnd(AActor* Boss)
+{
+    if (!IsValid(Boss)) return;
+    auto* Intent = Boss->FindComponentByClass<UBossCombatIntentComponent>();
+    if (!Intent)
+    {
+        Intent = NewObject<UBossCombatIntentComponent>(Boss, TEXT("CombatIntent"));
+        Boss->AddInstanceComponent(Intent);
+        Intent->RegisterComponent();
+        Intent->AddTickPrerequisiteActor(Boss);
+    }
+    Intent->RecordAttackRecoveryEnd();
+}
+
 bool UBossCombatIntentLibrary::IsAttackIntentActive(AActor* Boss)
 {
     const auto* Intent = IsValid(Boss) ? Boss->FindComponentByClass<UBossCombatIntentComponent>() : nullptr;
@@ -532,6 +616,23 @@ bool UBossCombatIntentLibrary::ContinueTwoHitOrRecover(AActor* Boss)
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossPostAttackProbeTest, "Battle.GOAP.PostAttackProbe",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBossPostAttackProbeTest::RunTest(const FString& Parameters)
+{
+    const auto Choose = [](int32 Id, float Distance, bool Fresh, bool Cooldown, float Roll)
+    { return ChoosePostAttackProbe(Id, Distance, 0, 350, 1, Fresh, Cooldown, Roll, .25f); };
+    TestTrue(TEXT("Ordinary next punch may prepare with a side step"), Choose(0, 250, true, true, .1f));
+    TestFalse(TEXT("Not every eligible attack probes"), Choose(1, 250, true, true, .25f));
+    TestFalse(TEXT("Expired post-attack choice stays direct"), Choose(0, 250, false, true, 0));
+    TestFalse(TEXT("Probe cooldown is respected"), Choose(0, 250, true, false, 0));
+    TestFalse(TEXT("Close pressure does not force retreat"), Choose(0, 173, true, true, 0));
+    TestFalse(TEXT("Far target still needs attack entry"), Choose(0, 500, true, true, 0));
+    TestFalse(TEXT("Guard break is not delayed by decorative movement"), Choose(5, 250, true, true, 0));
+    TestTrue(TEXT("Two-hit intention can use the same preparation"), Choose(9, 250, true, true, 0));
+    TestFalse(TEXT("Rear target must turn first"), ChoosePostAttackProbe(0, 250, 0, 350, -.5f, true, true, 0, .25f));
+    return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossIntentFailureTest, "Battle.GOAP.IntentFailureReassessment",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FBossIntentFailureTest::RunTest(const FString& Parameters)

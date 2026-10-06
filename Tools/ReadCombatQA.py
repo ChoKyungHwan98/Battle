@@ -162,6 +162,9 @@ def markdown(summary, records, source, session, total):
               '- 막힌 길 대신 측면 진입 시작/도착: '
               +'/'.join(str(summary['events'].get(k,0)) for k in
                         ['intent_side_begin','intent_side_arrived']),
+              '- 선택한 공격 전 옆걸음 시작/도착/생략: '
+              +'/'.join(str(summary['events'].get(k,0)) for k in
+                        ['intent_probe_begin','intent_probe_arrived','intent_probe_skipped']),
               '- 2.2초 초과 종료 기록(프레임 지연 포함): '+str(len(summary['intent_duration_overruns'])),
               '', '## 판정과 회피', '',
               f'- 팔 접촉 전달: {summary["events"].get("contact_submitted",0)}회',
