@@ -4,6 +4,9 @@
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "BossCombatIntentComponent.generated.h"
 
+class UMaterialInterface;
+class UParticleSystemComponent;
+
 /** Keeps one Utility choice alive while GOAP prepares its starting position. */
 UCLASS(ClassGroup=(Battle), meta=(BlueprintSpawnableComponent))
 class BATTLEBOSSPLANNING_API UBossCombatIntentComponent : public UActorComponent
@@ -22,7 +25,7 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float RunSpeed = 600.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float MaxDuration = 2.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float ReplanInterval = .2f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float TurnSpeed = 90.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float TurnSpeed = 160.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float FailureWindow = 6.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float ReassessDuration = .65f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float SideEntryAngle = 20.f;
@@ -35,6 +38,8 @@ private:
     void TickReassessment(float DeltaTime);
     void StartSideMove(const FVector& Destination, bool bLeft, bool bProbe);
     void Publish(const FString& Phase, const FString& Reason);
+    void UpdateCombatEffects();
+    void ClearCombatEffects();
     bool ReachableCenter(const FVector& Desired, FVector& Center) const;
     TWeakObjectPtr<UObject> Action;
     TWeakObjectPtr<AActor> Target;
@@ -55,6 +60,11 @@ private:
     bool bSideEntryUsed = false;
     bool bSideMoveIsProbe = false;
     bool bPostProbeRequested = false;
+    UPROPERTY(Transient) TObjectPtr<UMaterialInterface> PreviousOverlay;
+    UPROPERTY(Transient) TObjectPtr<UMaterialInterface> GuardOverlay;
+    UPROPERTY(Transient) TObjectPtr<UParticleSystemComponent> UpperChargeFX;
+    bool bGuardOverlayActive = false;
+    bool bUpperBurstPlayed = false;
 };
 
 UCLASS()
@@ -66,6 +76,10 @@ public:
     UFUNCTION(BlueprintPure, Category="Boss|Intent") static FString DescribeCombatDebug(AActor* Boss);
     /** One finite step in an ordinary punch; sampled once when the step opens. */
     UFUNCTION(BlueprintPure, Category="Boss|Intent") static float OrdinaryPunchStepDistance(AActor* Boss, float AuthoredDistance);
+    /** Only a later strike in a selected boxing pattern may take a fresh forward step. */
+    UFUNCTION(BlueprintPure, Category="Boss|Intent") static bool IsComboFollowStep(AActor* Boss);
+    UFUNCTION(BlueprintCallable, Category="Boss|Intent") static void CommitComboStep(AActor* Boss);
+    UFUNCTION(BlueprintCallable, Category="Battle|Feedback") static void PlayPlayerHitShake(AActor* Player, float Scale = 1.15f);
     UFUNCTION(BlueprintPure, Category="Boss|Intent") static bool CanStartPendingSlam(AActor* Boss);
     UFUNCTION(BlueprintCallable, Category="Boss|Intent") static void RecordAttackRecoveryEnd(AActor* Boss);
     UFUNCTION(BlueprintPure, Category="Boss|Intent") static bool IsAttackIntentActive(AActor* Boss);

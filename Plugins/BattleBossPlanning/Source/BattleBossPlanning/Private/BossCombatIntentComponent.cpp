@@ -15,6 +15,11 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Kismet/GameplayStatics.h"
+#include "Particles/ParticleSystem.h"
+#include "Particles/ParticleSystemComponent.h"
+#include "Materials/MaterialInterface.h"
+#include "GameFramework/PlayerController.h"
+#include "Camera/CameraShakeBase.h"
 #include <limits>
 
 namespace
@@ -46,6 +51,17 @@ float ApplyLabPunchMode(bool bMotionLab, int32 Mode, float CombatStep, float Bud
     if (Mode == 1) return 0.f;
     if (Mode == 2) return FMath::Clamp(Budget,0.f,145.f);
     return CombatStep;
+}
+
+float ComboFollowStep(float Distance, float Authored, float RetreatSpeed)
+{
+    if (!FMath::IsFinite(Distance) || !FMath::IsFinite(Authored) || !FMath::IsFinite(RetreatSpeed)) return 0.f;
+    // A new step for a new strike. Never chase continuously during the punch.
+    const float Room = FMath::Max(0.f, Distance - 250.f);
+    const float Lead = FMath::Clamp(RetreatSpeed, 0.f, 450.f) * .08f;
+    if (Room <= 0.f) return 0.f;
+    return FMath::Min(FMath::Max(0.f, Distance - 175.f),
+        FMath::Clamp(FMath::Max(Authored, Room + Lead), 0.f, 180.f));
 }
 
 bool ChoosePostAttackProbe(int32 ActionId, float Distance, float Min, float Max, float Dot,
@@ -174,6 +190,72 @@ UBossCombatIntentComponent::UBossCombatIntentComponent()
 {
     PrimaryComponentTick.bCanEverTick = true;
     PrimaryComponentTick.bStartWithTickEnabled = true;
+}
+
+void UBossCombatIntentComponent::ClearCombatEffects()
+{
+    if (UpperChargeFX) { UpperChargeFX->DestroyComponent(); UpperChargeFX = nullptr; }
+    if (bGuardOverlayActive)
+        if (ACharacter* Boss = Cast<ACharacter>(GetOwner())) Boss->GetMesh()->SetOverlayMaterial(PreviousOverlay);
+    PreviousOverlay = nullptr;
+    bGuardOverlayActive = false;
+    bUpperBurstPlayed = false;
+}
+
+void UBossCombatIntentComponent::UpdateCombatEffects()
+{
+    ACharacter* Boss = Cast<ACharacter>(GetOwner());
+    if (!Boss || !Boss->GetMesh() || !GetWorld()) return;
+    const int32 Id = static_cast<int32>(Number(Object(Boss, TEXT("ActiveAction")), TEXT("ActionId"), -1));
+    const bool bWindup = StateIs(Boss, TEXT("Boss.Combat.Attack.Windup"));
+    const bool bStrike = StateIs(Boss, TEXT("Boss.Combat.Attack.Active"));
+    const bool bAlive = Number(Boss, TEXT("CurrentHealth")) > 0;
+    const bool bGuardAura = bAlive && Id == 5 && (bWindup || bStrike);
+    if (bGuardAura && !bGuardOverlayActive)
+    {
+        if (!GuardOverlay) GuardOverlay = LoadObject<UMaterialInterface>(nullptr,
+            TEXT("/Game/BossArena/Boss/Materials/M_Crunch_GuardBodyAura.M_Crunch_GuardBodyAura"));
+        if (GuardOverlay)
+        {
+            PreviousOverlay = Boss->GetMesh()->GetOverlayMaterial();
+            Boss->GetMesh()->SetOverlayMaterial(GuardOverlay);
+            bGuardOverlayActive = true;
+        }
+    }
+    else if (!bGuardAura && bGuardOverlayActive)
+    {
+        Boss->GetMesh()->SetOverlayMaterial(PreviousOverlay);
+        PreviousOverlay = nullptr;
+        bGuardOverlayActive = false;
+    }
+
+    const double Elapsed = GetWorld()->GetTimeSeconds() - Number(Boss, TEXT("AttackStartedAt"));
+    const double Charge = Number(Object(Boss, TEXT("ActiveAction")), TEXT("TelegraphSeconds"));
+    const bool bCharging = bAlive && Id == 2 && bWindup && Charge > 0 && Elapsed >= 0 && Elapsed < Charge;
+    if (bCharging)
+    {
+        if (!UpperChargeFX)
+        {
+            UParticleSystem* Flame = LoadObject<UParticleSystem>(nullptr,
+                TEXT("/Game/ParagonCrunch/FX/Particles/Abilities/Uppercut/FX/P_Crunch_Fist_Fire_UpperCut.P_Crunch_Fist_Fire_UpperCut"));
+            if (Flame) UpperChargeFX = UGameplayStatics::SpawnEmitterAttached(Flame, Boss->GetMesh(), TEXT("hand_l"),
+                FVector::ZeroVector, FRotator::ZeroRotator, FVector(.2f), EAttachLocation::KeepRelativeOffset, true);
+        }
+        if (UpperChargeFX) UpperChargeFX->SetRelativeScale3D(FVector(FMath::Lerp(.2f, .85f,
+            static_cast<float>(FMath::Clamp(Elapsed / Charge, 0.0, 1.0)))));
+    }
+    else if (UpperChargeFX) { UpperChargeFX->DestroyComponent(); UpperChargeFX = nullptr; }
+
+    if (bAlive && Id == 2 && bStrike && !bUpperBurstPlayed)
+    {
+        // Release cue at the fist; actual damage/contact FX still use the hand trace.
+        UParticleSystem* Burst = LoadObject<UParticleSystem>(nullptr,
+            TEXT("/Game/ParagonCrunch/FX/Particles/Abilities/Uppercut/FX/P_Crunch_Uppercut_Impact.P_Crunch_Uppercut_Impact"));
+        if (Burst) UGameplayStatics::SpawnEmitterAtLocation(Boss, Burst, Boss->GetMesh()->GetSocketLocation(TEXT("hand_l")),
+            Boss->GetActorRotation(), FVector(.9f), true);
+        bUpperBurstPlayed = true;
+    }
+    if (Id != 2 || (!bWindup && !bStrike)) bUpperBurstPlayed = false;
 }
 
 void UBossCombatIntentComponent::Publish(const FString& Phase, const FString& Reason)
@@ -475,6 +557,7 @@ void UBossCombatIntentComponent::TickReassessment(float DeltaTime)
 void UBossCombatIntentComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+    UpdateCombatEffects();
     if (bReassessing) { TickReassessment(DeltaTime); return; }
     if (!bActive) return;
     AActor* Boss = GetOwner();
@@ -497,6 +580,7 @@ void UBossCombatIntentComponent::TickComponent(float DeltaTime, ELevelTick TickT
 
 void UBossCombatIntentComponent::EndPlay(const EEndPlayReason::Type Reason)
 {
+    ClearCombatEffects();
     bActive = false;
     bReassessing = false;
     bSideEntryActive = false;
@@ -561,11 +645,14 @@ float UBossCombatIntentLibrary::AdjustIntentCandidate(AActor* Boss, int32 Candid
 
 float UBossCombatIntentLibrary::OrdinaryPunchStepDistance(AActor* Boss, float AuthoredDistance)
 {
-    if (!IsValid(Boss) || !Flag(Boss,TEXT("bPunchFootSync"))) return FMath::Max(0.f, AuthoredDistance);
-    const int32 Id = static_cast<int32>(Number(Object(Boss,TEXT("ActiveAction")),TEXT("ActionId"),-1));
-    if (Id != 0 && Id != 1) return FMath::Max(0.f, AuthoredDistance);
+    if (!IsValid(Boss)) return FMath::Max(0.f, AuthoredDistance);
     const AActor* Player = Cast<AActor>(Object(Boss,TEXT("ObservedPlayer")));
     const float Retreat = IsValid(Player) ? FVector::DotProduct(Player->GetVelocity(), Boss->GetActorForwardVector()) : 0.f;
+    if (IsComboFollowStep(Boss) && IsValid(Player))
+        return ComboFollowStep(FVector::Dist2D(Boss->GetActorLocation(), Player->GetActorLocation()), AuthoredDistance, Retreat);
+    if (!Flag(Boss,TEXT("bPunchFootSync"))) return FMath::Max(0.f, AuthoredDistance);
+    const int32 Id = static_cast<int32>(Number(Object(Boss,TEXT("ActiveAction")),TEXT("ActionId"),-1));
+    if (Id != 0 && Id != 1) return FMath::Max(0.f, AuthoredDistance);
     const auto* Intent = Boss->FindComponentByClass<UBossCombatIntentComponent>();
     const bool bLab = Boss->GetWorld() && Boss->GetWorld()->GetMapName().Contains(TEXT("Lvl_BossMotionLab"));
     const float Budget = static_cast<float>(FMath::Max(0.0,Number(Boss,TEXT("AttackAdvanceBudget"))));
@@ -573,6 +660,31 @@ float UBossCombatIntentLibrary::OrdinaryPunchStepDistance(AActor* Boss, float Au
     // ticking the attack uses the stored distance and original foot curve, not this query again.
     const float CombatStep = FMath::Min(OnePunchStep(Number(Boss,TEXT("AttackStartDistance")), AuthoredDistance, Retreat),Budget);
     return ApplyLabPunchMode(bLab,Intent ? Intent->MotionLabPunchMode : 0,CombatStep,Budget);
+}
+
+bool UBossCombatIntentLibrary::IsComboFollowStep(AActor* Boss)
+{
+    const int32 Id = static_cast<int32>(Number(Object(Boss,TEXT("ActiveAction")),TEXT("ActionId"),-1));
+    return IsValid(Boss) && (Id == 4 || Id == 9) && Number(Boss,TEXT("HitIndex")) > 0;
+}
+
+void UBossCombatIntentLibrary::CommitComboStep(AActor* Boss)
+{
+    if (!IsComboFollowStep(Boss)) return;
+    SetFlag(Boss,TEXT("bDirectionCommitted"),true);
+    SetFlag(Boss,TEXT("bCanTurn"),false);
+    Invoke(Boss,TEXT("RecordCombatQA"),TEXT("combo_follow_step_committed"));
+}
+
+void UBossCombatIntentLibrary::PlayPlayerHitShake(AActor* Player, float Scale)
+{
+    if (!IsValid(Player)) return;
+    const APawn* Pawn = Cast<APawn>(Player);
+    APlayerController* Controller = Pawn ? Cast<APlayerController>(Pawn->GetController()) : nullptr;
+    if (!Controller) return;
+    UClass* Shake = LoadClass<UCameraShakeBase>(nullptr,
+        TEXT("/Game/BossArena/Player/Blueprints/BP_CamShake_Hit.BP_CamShake_Hit_C"));
+    if (Shake) Controller->ClientStartCameraShake(Shake, FMath::Clamp(Scale,0.f,2.f));
 }
 
 bool UBossCombatIntentLibrary::CanStartPendingSlam(AActor* Boss)
@@ -641,9 +753,10 @@ double FinalizeWeights(TArray<double>& Weights, const TArray<bool>& IsApproach, 
 bool CanLinkTwoHit(float Distance, float Dot, float Min, float Max, bool bTargetAvailable)
 {
     // A link is permission to prepare the next strike, not permission to hit.
-    // Allow 40cm for the existing second step; do not expand the hand trace.
+    // A backwards roll may open a fresh, bounded step for the second jab.
+    // This start permission does not enlarge the physical hand trace.
     return bTargetAvailable && FMath::IsFinite(Distance) && FMath::IsFinite(Dot)
-        && Distance >= Min && Distance <= Max + 40.f && Dot >= 0.f;
+        && Distance >= Min && Distance <= Max + 240.f && Dot >= 0.f;
 }
 }
 
@@ -695,7 +808,19 @@ bool UBossCombatIntentLibrary::ContinueTwoHitOrRecover(AActor* Boss)
 {
     if (!IsValid(Boss)) return false;
     UObject* Action = Object(Boss, TEXT("ActiveAction"));
-    if (Number(Action, TEXT("ActionId"), -1) != 9) return true;
+    const int32 Id = static_cast<int32>(Number(Action, TEXT("ActionId"), -1));
+    if (Id != 4 && Id != 9) return true;
+    if (Id == 4)
+    {
+        // Between strikes, prepare the next aim. Its step commits direction again.
+        if (Number(Boss,TEXT("HitIndex")) < 2)
+        {
+            SetFlag(Boss,TEXT("bDirectionCommitted"),false);
+            SetFlag(Boss,TEXT("bCanTurn"),true);
+            Invoke(Boss,TEXT("RecordCombatQA"),TEXT("combo_next_strike_prepare"));
+        }
+        return true;
+    }
     if (!StateIs(Boss, TEXT("Boss.Combat.Attack.Active")) || Number(Boss, TEXT("HitIndex")) != 0) return false;
     AActor* Target = Cast<AActor>(Object(Boss, TEXT("ObservedPlayer")));
     const bool bTargetAvailable = IsValid(Target) && Number(Target, TEXT("CurrentHealth")) > 0
@@ -704,6 +829,8 @@ bool UBossCombatIntentLibrary::ContinueTwoHitOrRecover(AActor* Boss)
     if (CanLinkTwoHit(Delta.Size2D(), FVector::DotProduct(Boss->GetActorForwardVector(), Delta.GetSafeNormal2D()),
         Number(Action, TEXT("MinDistance")), Number(Action, TEXT("MaxDistance")), bTargetAvailable))
     {
+        SetFlag(Boss,TEXT("bDirectionCommitted"),false);
+        SetFlag(Boss,TEXT("bCanTurn"),true);
         Invoke(Boss, TEXT("RecordCombatQA"), TEXT("two_hit_link_accepted"));
         return true;
     }
@@ -818,11 +945,23 @@ bool FBossIntentChoiceTest::RunTest(const FString& Parameters)
     TArray<double> Far{20,88,0};
     TestEqual(TEXT("Long distance keeps approach"), FinalizeWeights(Far, {false,true,false}, false), 108.0);
     TestTrue(TEXT("Valid front link"), CanLinkTwoHit(285, 1, 0, 285, true));
-    TestTrue(TEXT("Existing step allowance boundary"), CanLinkTwoHit(325, 0, 0, 285, true));
-    TestFalse(TEXT("Too far aborts"), CanLinkTwoHit(326, 1, 0, 285, true));
+    TestTrue(TEXT("A backwards roll allows the next strike to prepare"), CanLinkTwoHit(500, 1, 0, 285, true));
+    TestTrue(TEXT("Finite follow-up allowance boundary"), CanLinkTwoHit(525, 0, 0, 285, true));
+    TestFalse(TEXT("Too far aborts"), CanLinkTwoHit(526, 1, 0, 285, true));
     TestFalse(TEXT("Behind aborts"), CanLinkTwoHit(200, -.01f, 0, 285, true));
     TestFalse(TEXT("Unavailable target aborts"), CanLinkTwoHit(200, 1, 0, 285, false));
     TestFalse(TEXT("Inside minimum aborts"), CanLinkTwoHit(100, 1, 150, 285, true));
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossComboFollowStepTest,"Battle.Combat.ComboFollowStep",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBossComboFollowStepTest::RunTest(const FString& Parameters)
+{
+    TestEqual(TEXT("Close contact does not add forward travel"),ComboFollowStep(175,65,450),0.f);
+    TestEqual(TEXT("Short retreat has a finite velocity allowance"),ComboFollowStep(300,65,450),86.f);
+    TestEqual(TEXT("Backwards roll can request a fresh jab step"),ComboFollowStep(500,65,450),180.f);
+    TestEqual(TEXT("Retreat speed cannot extend the bound"),ComboFollowStep(700,65,1000),180.f);
+    TestEqual(TEXT("Invalid target geometry cannot request travel"),ComboFollowStep(std::numeric_limits<float>::quiet_NaN(),65,0),0.f);
     return true;
 }
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossIntentTransitionParametersTest, "Battle.GOAP.IntentTransitionParameters",
