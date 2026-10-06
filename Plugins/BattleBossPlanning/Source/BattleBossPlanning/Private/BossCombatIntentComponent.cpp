@@ -17,6 +17,16 @@
 
 namespace
 {
+// Failures in unrelated encounters/time windows must not accumulate forever.
+bool RecordEntryFailure(int32& Count, double& LastAt, double Now, double Window)
+{
+    Count = LastAt >= 0.0 && Now >= LastAt && Now - LastAt <= Window ? Count + 1 : 1;
+    LastAt = Now;
+    if (Count < 2) return false;
+    Count = 0;
+    return true;
+}
+
 double Number(const UObject* O, FName Name, double Default = 0.0)
 {
     if (!IsValid(O)) return Default;
@@ -125,7 +135,7 @@ void UBossCombatIntentComponent::Publish(const FString& Phase, const FString& Re
 void UBossCombatIntentComponent::BeginSelectedIntent()
 {
     ACharacter* Boss = Cast<ACharacter>(GetOwner());
-    if (!Boss || bActive || !StateIs(Boss, TEXT("Boss.Combat.Ready"))) return;
+    if (!Boss || IsActive() || !StateIs(Boss, TEXT("Boss.Combat.Ready"))) return;
     Action = Object(Boss, TEXT("ActiveAction"));
     Target = Cast<AActor>(Object(Boss, TEXT("ObservedPlayer")));
     Slot = static_cast<int32>(Number(Boss, TEXT("SelectedSlot"), -1));
@@ -191,7 +201,7 @@ void UBossCombatIntentComponent::Advance()
 {
     ACharacter* Boss = Cast<ACharacter>(GetOwner());
     AActor* Player = Target.Get();
-    if (!Boss || !IsValid(Player) || !Action.IsValid()) { Finish(false, TEXT("대상 또는 공격이 사라짐")); return; }
+    if (!Boss || !IsValid(Player) || !Action.IsValid()) { Finish(false, TEXT("대상 또는 공격이 사라짐"), false); return; }
     const FVector Delta = Player->GetActorLocation() - Boss->GetActorLocation();
     const float Distance = Delta.Size2D();
     const float Facing = FVector::DotProduct(Boss->GetActorForwardVector(), Delta.GetSafeNormal2D());
@@ -233,7 +243,7 @@ void UBossCombatIntentComponent::Advance()
     }
 }
 
-void UBossCombatIntentComponent::Finish(bool bAttack, const FString& Reason)
+void UBossCombatIntentComponent::Finish(bool bAttack, const FString& Reason, bool bCountFailure)
 {
     ACharacter* Boss = Cast<ACharacter>(GetOwner());
     if (!Boss) { bActive = false; return; }
@@ -250,25 +260,72 @@ void UBossCombatIntentComponent::Finish(bool bAttack, const FString& Reason)
         Invoke(Boss, TEXT("BeginCombatAction"));
         if (Flag(Boss, TEXT("bActionStartAllowed")))
         {
+            ConsecutiveEntryFailures = 0;
+            LastEntryFailureAt = -1.0;
             Invoke(Boss, TEXT("RecordCombatQA"), TEXT("intent_arrived"));
             return;
         }
         Publish(TEXT("cancelled"), TEXT("도착 후 공격 시작 검사에서 거부됨"));
     }
-    FailedUntilBySlot.Add(Slot, GetWorld()->GetTimeSeconds() + 3.0);
     Invoke(Boss, TEXT("RecordCombatQA"), TEXT("intent_aborted"));
+    // Death, knockdown and externally changed states are interruptions, not bad entries.
+    if (!bCountFailure || !StateIs(Boss, TEXT("Boss.Combat.Ready"))
+        || Number(Boss, TEXT("CurrentHealth")) <= 0 || !Target.IsValid()
+        || Number(Target.Get(), TEXT("CurrentHealth")) <= 0 || Flag(Target.Get(), TEXT("bKnockedDown")))
+    {
+        ConsecutiveEntryFailures = 0;
+        LastEntryFailureAt = -1.0;
+        return;
+    }
+    const double Now = GetWorld()->GetTimeSeconds();
+    FailedUntilBySlot.Add(Slot, Now + 3.0);
+    if (!RecordEntryFailure(ConsecutiveEntryFailures, LastEntryFailureAt, Now, FailureWindow)) return;
+    if (!TransitionState(Boss, TEXT("Boss.Combat.Ready"), TEXT("Boss.Combat.Observe"),
+        TEXT("연속 진입 실패: 추격을 끊고 상황 관찰"))) return;
+    bReassessing = true;
+    ReassessUntil = Now + FMath::Max(.1f, ReassessDuration);
+    SetFlag(Boss, TEXT("bCombatApproachActive"), false);
+    SetNumber(Boss, TEXT("UtilityAction"), 0);
+    Publish(TEXT("reassess"), TEXT("진입 2회 실패: 잠깐 멈춰 거리를 살핀 뒤 다시 선택"));
+    Invoke(Boss, TEXT("RecordCombatQA"), TEXT("intent_reassess_begin"));
+}
+
+void UBossCombatIntentComponent::TickReassessment(float DeltaTime)
+{
+    AActor* Boss = GetOwner();
+    const bool bOwnsState = StateIs(Boss, TEXT("Boss.Combat.Observe"));
+    const bool bTargetAvailable = Target.IsValid() && Number(Target.Get(), TEXT("CurrentHealth")) > 0
+        && !Flag(Target.Get(), TEXT("bKnockedDown"));
+    if (!bOwnsState || Number(Boss, TEXT("CurrentHealth")) <= 0 || !bTargetAvailable)
+    {
+        bReassessing = false;
+        if (bOwnsState && Number(Boss, TEXT("CurrentHealth")) > 0)
+            TransitionState(Boss, TEXT("Boss.Combat.Observe"), TEXT("Boss.Combat.Ready"), TEXT("대상 변경: 관찰 종료"));
+        Publish(TEXT("cancelled"), TEXT("상태 또는 대상 변경으로 관찰 중단"));
+        Invoke(Boss, TEXT("RecordCombatQA"), TEXT("intent_reassess_cancelled"));
+        return;
+    }
+    const FRotator Wanted(0.f, (Target->GetActorLocation() - Boss->GetActorLocation()).Rotation().Yaw, 0.f);
+    Boss->SetActorRotation(FMath::RInterpConstantTo(Boss->GetActorRotation(), Wanted, DeltaTime, TurnSpeed * .5f));
+    if (GetWorld()->GetTimeSeconds() < ReassessUntil) return;
+    bReassessing = false;
+    const bool bReady = TransitionState(Boss, TEXT("Boss.Combat.Observe"), TEXT("Boss.Combat.Ready"), TEXT("관찰 종료: 현재 상황으로 새 행동 선택"));
+    Publish(bReady ? TEXT("ready") : TEXT("cancelled"), bReady
+        ? TEXT("짧은 관찰 완료: 이전 공격을 강제하지 않고 다시 판단") : TEXT("관찰 후 대기 복귀 거부됨"));
+    Invoke(Boss, TEXT("RecordCombatQA"), bReady ? TEXT("intent_reassess_end") : TEXT("intent_reassess_cancelled"));
 }
 
 void UBossCombatIntentComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+    if (bReassessing) { TickReassessment(DeltaTime); return; }
     if (!bActive) return;
     AActor* Boss = GetOwner();
     if (!StateIs(Boss, TEXT("Boss.Combat.Position")) || !Target.IsValid()
         || Number(Boss, TEXT("CurrentHealth")) <= 0 || Number(Target.Get(), TEXT("CurrentHealth")) <= 0
         || Flag(Target.Get(), TEXT("bKnockedDown")) || Object(Boss, TEXT("ActiveAction")) != Action.Get()
         || static_cast<int32>(Number(Boss, TEXT("SelectedSlot"), -1)) != Slot)
-    { Finish(false, TEXT("상태 또는 대상 변경으로 진입 중단")); return; }
+    { Finish(false, TEXT("상태 또는 대상 변경으로 진입 중단"), false); return; }
     const double Now = GetWorld()->GetTimeSeconds();
     SetNumber(Boss, TEXT("IntentElapsed"), Now - StartedAt);
     if (Now - StartedAt >= MaxDuration) { Finish(false, TEXT("2초 진입 제한: 다음 행동 재평가")); return; }
@@ -284,6 +341,7 @@ void UBossCombatIntentComponent::TickComponent(float DeltaTime, ELevelTick TickT
 void UBossCombatIntentComponent::EndPlay(const EEndPlayReason::Type Reason)
 {
     bActive = false;
+    bReassessing = false;
     Super::EndPlay(Reason);
 }
 
@@ -423,6 +481,22 @@ bool UBossCombatIntentLibrary::ContinueTwoHitOrRecover(AActor* Boss)
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossIntentFailureTest, "Battle.GOAP.IntentFailureReassessment",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBossIntentFailureTest::RunTest(const FString& Parameters)
+{
+    int32 Count = 0;
+    double Last = -1;
+    TestFalse(TEXT("One failed entry can retry"), RecordEntryFailure(Count, Last, 1, 6));
+    TestTrue(TEXT("Second recent failure breaks pursuit"), RecordEntryFailure(Count, Last, 3, 6));
+    TestFalse(TEXT("Observation starts a new failure pair"), RecordEntryFailure(Count, Last, 4, 6));
+    TestFalse(TEXT("Old failure expires"), RecordEntryFailure(Count, Last, 11, 6));
+    TestTrue(TEXT("Window includes boundary"), RecordEntryFailure(Count, Last, 17, 6));
+    Count = 0; Last = -1; // Successful attack entry resets the episode.
+    TestFalse(TEXT("Success prevents old failures triggering observation"), RecordEntryFailure(Count, Last, 18, 6));
+    TestFalse(TEXT("Clock reset cannot carry failures into a new world"), RecordEntryFailure(Count, Last, 0, 6));
+    return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossIntentChoiceTest, "Battle.GOAP.IntentChoiceAndLink",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FBossIntentChoiceTest::RunTest(const FString& Parameters)

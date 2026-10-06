@@ -14,16 +14,19 @@ public:
     void BeginSelectedIntent();
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
-    bool IsActive() const { return bActive; }
+    bool IsActive() const { return bActive || bReassessing; }
     float FailureMultiplier(int32 Slot) const;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float RunSpeed = 600.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float MaxDuration = 2.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float ReplanInterval = .2f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float TurnSpeed = 90.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float FailureWindow = 6.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float ReassessDuration = .65f;
     UPROPERTY(BlueprintReadOnly, Category="Boss|Intent") FString Status;
 private:
     void Advance();
-    void Finish(bool bAttack, const FString& Reason);
+    void Finish(bool bAttack, const FString& Reason, bool bCountFailure = true);
+    void TickReassessment(float DeltaTime);
     void Publish(const FString& Phase, const FString& Reason);
     bool ReachableCenter(const FVector& Desired, FVector& Center) const;
     TWeakObjectPtr<UObject> Action;
@@ -34,7 +37,11 @@ private:
     double NextPlanAt = 0.0;
     float PreviousSpeed = 0.f;
     float GoalMaxDistance = 0.f;
+    int32 ConsecutiveEntryFailures = 0;
+    double LastEntryFailureAt = -1.0;
+    double ReassessUntil = 0.0;
     bool bActive = false;
+    bool bReassessing = false;
 };
 
 UCLASS()
