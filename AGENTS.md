@@ -1,5 +1,7 @@
 # Battle workspace
 
+- Crunch animation source policy: never use Mixamo, external mocap, or other-character animation clips. Use Crunch's own original clips or hand-author new animation on Crunch's skeleton; the FightAnimations/UAF libraries are not permitted Crunch motion sources.
+
 - A 60fps authored sequence inheriting 30fps PlatformTargetFrameRate must end on an even authored frame; a half-frame compression endpoint can assert in AnimCompressionTypes.cpp. Current Crunch hand traces use hand_l/r socket centers, so archived hand_slide capsule fixtures must not predict current reach.
 
 - Native calls to Crunch's `TransitionBossState` must bind `ExpectedState` to the source state and `NewState` to the destination by parameter name; filling every GameplayTag parameter with the destination rejects the transition. Check the resulting BossState before advancing. For C++ automation, use AutomationTestToolset DiscoverTests then RunTests and collect GetTestResults; a queued console command alone is not evidence.
