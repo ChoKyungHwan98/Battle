@@ -1,9 +1,11 @@
 #include "BossPositionPlanner.h"
 
-FBossPositionPlan UBossPositionPlanner::PlanAttackPosition(
+namespace
+{
+FBossPositionPlan FindAttackPositionPlan(
     float Distance, float FacingDot, float StartMin, float StartMax, float MinimumFacingDot,
     bool bForwardOpen, bool bBackOpen, bool bLeftOpen, bool bRightOpen,
-    bool bProbeRequested, float MoveSpeed)
+    bool bProbeRequested, float MoveSpeed, bool bSideEntryReachesRange)
 {
     FBossPositionPlan Result;
     Result.Goal = bProbeRequested ? EBossPositionGoal::ProbeThenStrike : EBossPositionGoal::PrepareStrike;
@@ -33,8 +35,12 @@ FBossPositionPlan UBossPositionPlanner::PlanAttackPosition(
         {EBossPositionAction::StepBack, 0, Range, Facing, Distance < StartMin && bBackOpen,
             FMath::Max(0.f, StartMin - Distance) / MoveSpeed + .15f},
         {EBossPositionAction::FaceTarget, 0, Facing, 0, true, .25f},
-        {EBossPositionAction::OrbitLeft, Range, uint8(Probe | Facing), 0, bLeftOpen, .65f},
-        {EBossPositionAction::OrbitRight, Range, uint8(Probe | Facing), 0, bRightOpen, .65f}
+        {EBossPositionAction::OrbitLeft, uint8(bSideEntryReachesRange ? 0 : Range),
+            uint8(bSideEntryReachesRange ? (Probe | Range) : (Probe | Facing)),
+            uint8(bSideEntryReachesRange ? Facing : 0), bLeftOpen, .65f},
+        {EBossPositionAction::OrbitRight, uint8(bSideEntryReachesRange ? 0 : Range),
+            uint8(bSideEntryReachesRange ? (Probe | Range) : (Probe | Facing)),
+            uint8(bSideEntryReachesRange ? Facing : 0), bRightOpen, .65f}
     };
     struct FNode { uint8 Facts; float Cost; TArray<EBossPositionAction> Actions; };
     TArray<FNode> Open;
@@ -76,6 +82,24 @@ FBossPositionPlan UBossPositionPlanner::PlanAttackPosition(
     Result.Reason = TEXT("No traversable position for selected attack");
     return Result;
 }
+}
+
+FBossPositionPlan UBossPositionPlanner::PlanAttackPosition(
+    float Distance, float FacingDot, float StartMin, float StartMax, float MinimumFacingDot,
+    bool bForwardOpen, bool bBackOpen, bool bLeftOpen, bool bRightOpen,
+    bool bProbeRequested, float MoveSpeed)
+{
+    return FindAttackPositionPlan(Distance, FacingDot, StartMin, StartMax, MinimumFacingDot,
+        bForwardOpen, bBackOpen, bLeftOpen, bRightOpen, bProbeRequested, MoveSpeed, false);
+}
+
+FBossPositionPlan UBossPositionPlanner::PlanAttackEntry(
+    float Distance, float FacingDot, float StartMin, float StartMax, float MinimumFacingDot,
+    bool bForwardOpen, bool bBackOpen, bool bLeftEntryOpen, bool bRightEntryOpen, float MoveSpeed)
+{
+    return FindAttackPositionPlan(Distance, FacingDot, StartMin, StartMax, MinimumFacingDot,
+        bForwardOpen, bBackOpen, bLeftEntryOpen, bRightEntryOpen, false, MoveSpeed, true);
+}
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
@@ -101,6 +125,18 @@ bool FBossAttackPositionTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Behind target turns"), Plan(240.f, -1.f, true, true, true, true, false).FirstAction, EBossPositionAction::FaceTarget);
     TestEqual(TEXT("Only right probe is open"), Plan(240.f, 1.f, true, true, false, true, true).FirstAction, EBossPositionAction::OrbitRight);
     TestFalse(TEXT("Blocked probe cannot be completed"), Plan(240.f, 1.f, true, true, false, false, true).bFound);
+    const auto SideEntry = UBossPositionPlanner::PlanAttackEntry(500, 1, 180, 280, .7f, false, false, false, true, 600);
+    TestTrue(TEXT("Verified lateral destination can prepare attack"), SideEntry.bFound && SideEntry.Steps.Num() == 2);
+    if (SideEntry.Steps.Num() == 2)
+    {
+        TestEqual(TEXT("Open right entry is used"), SideEntry.Steps[0], EBossPositionAction::OrbitRight);
+        TestEqual(TEXT("Lateral entry also rechecks facing"), SideEntry.Steps[1], EBossPositionAction::FaceTarget);
+    }
+    TestFalse(TEXT("No certified entry cannot invent a route"),
+        UBossPositionPlanner::PlanAttackEntry(500, 1, 180, 280, .7f, false, false, false, false, 600).bFound);
+    TestEqual(TEXT("Open nearby direct approach remains preferable"),
+        UBossPositionPlanner::PlanAttackEntry(350, 1, 180, 280, .7f, true, false, true, true, 600).FirstAction,
+        EBossPositionAction::DirectApproach);
     TestFalse(TEXT("Invalid range rejected"), UBossPositionPlanner::PlanAttackPosition(200.f, 1.f, 300.f, 200.f, .7f, true, true, true, true, false, 600.f).bFound);
     return true;
 }

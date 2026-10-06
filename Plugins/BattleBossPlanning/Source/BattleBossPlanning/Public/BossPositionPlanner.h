@@ -57,6 +57,12 @@ class BATTLEBOSSPLANNING_API UBossPositionPlanner : public UBlueprintFunctionLib
     GENERATED_BODY()
 
 public:
+    /** Side booleans certify a traversable destination INSIDE this attack's band.
+     * Unlike probe clearance, these allow a lateral entry to establish range. */
+    static FBossPositionPlan PlanAttackEntry(
+        float Distance, float FacingDot, float StartMin, float StartMax, float MinimumFacingDot,
+        bool bForwardOpen, bool bBackOpen, bool bLeftEntryOpen, bool bRightEntryOpen, float MoveSpeed);
+
     /** The caller supplies the selected attack's goal; this never selects another attack. */
     UFUNCTION(BlueprintPure, Category = "Boss|GOAP")
     static FBossPositionPlan PlanAttackPosition(

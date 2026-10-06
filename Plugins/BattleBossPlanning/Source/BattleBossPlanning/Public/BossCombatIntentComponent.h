@@ -22,6 +22,8 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float TurnSpeed = 90.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float FailureWindow = 6.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float ReassessDuration = .65f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float SideEntryAngle = 20.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float SideEntrySpeed = 220.f;
     UPROPERTY(BlueprintReadOnly, Category="Boss|Intent") FString Status;
 private:
     void Advance();
@@ -40,8 +42,11 @@ private:
     int32 ConsecutiveEntryFailures = 0;
     double LastEntryFailureAt = -1.0;
     double ReassessUntil = 0.0;
+    FVector SideEntryGoal = FVector::ZeroVector;
     bool bActive = false;
     bool bReassessing = false;
+    bool bSideEntryActive = false;
+    bool bSideEntryUsed = false;
 };
 
 UCLASS()

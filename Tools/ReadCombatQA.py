@@ -159,6 +159,9 @@ def markdown(summary, records, source, session, total):
               '- 연속 실패 후 관찰 시작/완료/중단: '
               +'/'.join(str(summary['events'].get(k,0)) for k in
                         ['intent_reassess_begin','intent_reassess_end','intent_reassess_cancelled']),
+              '- 막힌 길 대신 측면 진입 시작/도착: '
+              +'/'.join(str(summary['events'].get(k,0)) for k in
+                        ['intent_side_begin','intent_side_arrived']),
               '- 2.2초 초과 종료 기록(프레임 지연 포함): '+str(len(summary['intent_duration_overruns'])),
               '', '## 판정과 회피', '',
               f'- 팔 접촉 전달: {summary["events"].get("contact_submitted",0)}회',

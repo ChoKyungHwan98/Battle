@@ -17,6 +17,13 @@
 
 namespace
 {
+FVector LateralEntryGoal(const FVector& Boss, const FVector& Player, float Range, float Degrees)
+{
+    FVector Goal = Player + (Boss - Player).GetSafeNormal2D().RotateAngleAxis(Degrees, FVector::UpVector) * Range;
+    Goal.Z = Boss.Z;
+    return Goal;
+}
+
 // Failures in unrelated encounters/time windows must not accumulate forever.
 bool RecordEntryFailure(int32& Count, double& LastAt, double Now, double Window)
 {
@@ -142,6 +149,7 @@ void UBossCombatIntentComponent::BeginSelectedIntent()
     if (!Action.IsValid() || !Target.IsValid() || Slot < 0) return;
     const double Now = GetWorld()->GetTimeSeconds();
     StartedAt = NextPlanAt = Now;
+    bSideEntryActive = bSideEntryUsed = false;
     PreviousSpeed = Boss->GetCharacterMovement()->MaxWalkSpeed;
     const float Distance = FVector::Dist2D(Boss->GetActorLocation(), Target->GetActorLocation());
     const float StartMax = Number(Action.Get(), TEXT("MaxDistance"));
@@ -202,6 +210,20 @@ void UBossCombatIntentComponent::Advance()
     ACharacter* Boss = Cast<ACharacter>(GetOwner());
     AActor* Player = Target.Get();
     if (!Boss || !IsValid(Player) || !Action.IsValid()) { Finish(false, TEXT("대상 또는 공격이 사라짐"), false); return; }
+    AAIController* Controller = Cast<AAIController>(Boss->GetController());
+    if (bSideEntryActive)
+    {
+        // Hold the chosen world-space destination: do not chase a moving side point.
+        if (FVector::Dist2D(Boss->GetActorLocation(), SideEntryGoal) > 20.f)
+        {
+            if (!Controller || Controller->GetMoveStatus() == EPathFollowingStatus::Idle)
+                Finish(false, TEXT("측면 진입 경로에서 이동 중단"));
+            return;
+        }
+        bSideEntryActive = false;
+        if (Controller) Controller->StopMovement();
+        Invoke(Boss, TEXT("RecordCombatQA"), TEXT("intent_side_arrived"));
+    }
     const FVector Delta = Player->GetActorLocation() - Boss->GetActorLocation();
     const float Distance = Delta.Size2D();
     const float Facing = FVector::DotProduct(Boss->GetActorForwardVector(), Delta.GetSafeNormal2D());
@@ -221,11 +243,25 @@ void UBossCombatIntentComponent::Advance()
     FVector Reachable;
     const bool bNeedTranslation = Distance > GoalMaxDistance || Distance < Min;
     const bool bPathOpen = bNeedTranslation && ReachableCenter(Goal, Reachable);
-    const auto Plan = UBossPositionPlanner::PlanAttackPosition(Distance, Facing, Min, GoalMaxDistance, MinimumDot,
-        bPathOpen && Distance > GoalMaxDistance, bPathOpen && Distance < Min, false, false, false, RunSpeed);
+    FVector LeftEntry, RightEntry;
+    bool bLeftEntryOpen = false, bRightEntryOpen = false;
+    if (bNeedTranslation && !bPathOpen && !bSideEntryUsed)
+    {
+        const auto SideOpen = [&](float Degrees, FVector& Destination)
+        {
+            if (!ReachableCenter(LateralEntryGoal(Boss->GetActorLocation(), Player->GetActorLocation(), DesiredRange, Degrees), Destination)) return false;
+            const float Range = FVector::Dist2D(Destination, Player->GetActorLocation());
+            return Range >= Min && Range <= GoalMaxDistance;
+        };
+        const float Angle = FMath::Clamp(SideEntryAngle, 5.f, 35.f);
+        // Facing toward the player, positive rotation of the outward radius is left.
+        bLeftEntryOpen = SideOpen(Angle, LeftEntry);
+        bRightEntryOpen = SideOpen(-Angle, RightEntry);
+    }
+    const auto Plan = UBossPositionPlanner::PlanAttackEntry(Distance, Facing, Min, GoalMaxDistance, MinimumDot,
+        bPathOpen && Distance > GoalMaxDistance, bPathOpen && Distance < Min, bLeftEntryOpen, bRightEntryOpen, RunSpeed);
     if (!Plan.bFound) { Finish(false, TEXT("공격할 자리로 가는 길이 막힘")); return; }
     SetNumber(Boss, TEXT("GoapFirstAction"), static_cast<int32>(Plan.FirstAction));
-    AAIController* Controller = Cast<AAIController>(Boss->GetController());
     if (Plan.FirstAction == EBossPositionAction::FaceTarget)
     {
         if (Controller) Controller->StopMovement();
@@ -241,6 +277,19 @@ void UBossCombatIntentComponent::Advance()
         Publish(TEXT("enter"), Plan.FirstAction == EBossPositionAction::StepBack
             ? TEXT("너무 가까워 한 걸음 거리 확보") : TEXT("선택한 공격을 위해 짧게 진입"));
     }
+    else if (Plan.FirstAction == EBossPositionAction::OrbitLeft || Plan.FirstAction == EBossPositionAction::OrbitRight)
+    {
+        if (!Controller) { Finish(false, TEXT("측면 이동 제어기가 없음")); return; }
+        SideEntryGoal = Plan.FirstAction == EBossPositionAction::OrbitLeft ? LeftEntry : RightEntry;
+        Boss->GetCharacterMovement()->MaxWalkSpeed = FMath::Max(1.f, SideEntrySpeed);
+        const FVector FloorDestination = SideEntryGoal - FVector(0.f, 0.f, Boss->GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+        const auto Request = Controller->MoveToLocation(FloorDestination, 10.f, false, true, true, false, nullptr, false);
+        if (Request == EPathFollowingRequestResult::Failed) { Finish(false, TEXT("측면 진입 이동 요청 실패")); return; }
+        bSideEntryActive = bSideEntryUsed = true;
+        Publish(TEXT("side_entry"), Plan.FirstAction == EBossPositionAction::OrbitLeft
+            ? TEXT("정면 길이 막혀 왼쪽 공격 자리로 이동") : TEXT("정면 길이 막혀 오른쪽 공격 자리로 이동"));
+        Invoke(Boss, TEXT("RecordCombatQA"), TEXT("intent_side_begin"));
+    }
 }
 
 void UBossCombatIntentComponent::Finish(bool bAttack, const FString& Reason, bool bCountFailure)
@@ -248,6 +297,7 @@ void UBossCombatIntentComponent::Finish(bool bAttack, const FString& Reason, boo
     ACharacter* Boss = Cast<ACharacter>(GetOwner());
     if (!Boss) { bActive = false; return; }
     bActive = false;
+    bSideEntryActive = false;
     Invoke(Boss, TEXT("StopBossLocomotion"));
     Boss->GetCharacterMovement()->MaxWalkSpeed = PreviousSpeed;
     const bool bReturnedToReady = TransitionState(Boss, TEXT("Boss.Combat.Position"), TEXT("Boss.Combat.Ready"), Reason);
@@ -342,6 +392,7 @@ void UBossCombatIntentComponent::EndPlay(const EEndPlayReason::Type Reason)
 {
     bActive = false;
     bReassessing = false;
+    bSideEntryActive = false;
     Super::EndPlay(Reason);
 }
 
@@ -495,6 +546,19 @@ bool FBossIntentFailureTest::RunTest(const FString& Parameters)
     Count = 0; Last = -1; // Successful attack entry resets the episode.
     TestFalse(TEXT("Success prevents old failures triggering observation"), RecordEntryFailure(Count, Last, 18, 6));
     TestFalse(TEXT("Clock reset cannot carry failures into a new world"), RecordEntryFailure(Count, Last, 0, 6));
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossSideEntryGeometryTest, "Battle.GOAP.SideEntryGeometry",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBossSideEntryGeometryTest::RunTest(const FString& Parameters)
+{
+    const FVector Boss(500, 0, 200), Player(0, 0, 96);
+    const FVector Left = LateralEntryGoal(Boss, Player, 270, 20);
+    const FVector Right = LateralEntryGoal(Boss, Player, 270, -20);
+    TestTrue(TEXT("Left keeps attack radius"), FMath::IsNearlyEqual(FVector::Dist2D(Left, Player), 270.f, .01f));
+    TestTrue(TEXT("Right keeps attack radius"), FMath::IsNearlyEqual(FVector::Dist2D(Right, Player), 270.f, .01f));
+    TestTrue(TEXT("Sides lie on opposite tangents"), Left.Y > 0 && Right.Y < 0);
+    TestTrue(TEXT("Actor center height stays with boss, not player"), Left.Z == Boss.Z && Right.Z == Boss.Z);
     return true;
 }
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossIntentChoiceTest, "Battle.GOAP.IntentChoiceAndLink",
