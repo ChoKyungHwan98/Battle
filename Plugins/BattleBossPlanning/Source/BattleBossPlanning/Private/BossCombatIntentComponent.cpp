@@ -80,6 +80,12 @@ void SetText(UObject* O, FName Name, const FString& Value)
 {
     if (IsValid(O)) if (FStrProperty* P = FindFProperty<FStrProperty>(O->GetClass(), Name)) P->SetPropertyValue_InContainer(O, Value);
 }
+FString Text(const UObject* O, FName Name)
+{
+    if (IsValid(O)) if (const FStrProperty* P = FindFProperty<FStrProperty>(O->GetClass(), Name))
+        return P->GetPropertyValue_InContainer(O);
+    return FString();
+}
 bool StateIs(const UObject* O, const TCHAR* Name)
 {
     const FStructProperty* P = IsValid(O) ? FindFProperty<FStructProperty>(O->GetClass(), TEXT("BossState")) : nullptr;
@@ -511,6 +517,43 @@ float UBossCombatIntentLibrary::AdjustIntentCandidate(AActor* Boss, int32 Candid
     if (!IsValid(Boss) || Score <= 0.f) return 0.f;
     if (const auto* Intent = Boss->FindComponentByClass<UBossCombatIntentComponent>()) Score *= Intent->FailureMultiplier(CandidateSlot);
     return Score;
+}
+
+FString UBossCombatIntentLibrary::DescribeCombatDebug(AActor* Boss)
+{
+    if (!IsValid(Boss)) return TEXT("보스 대기 중");
+    FString Result = FString::Printf(TEXT("HFSM %s\n%s\n회전 %s | 손 판정 %s | HP %.0f\n\n선택 %s\n거리 %.0fcm | 판단 #%d\n"),
+        *Text(Boss, TEXT("StateDisplay")), *Text(Boss, TEXT("TransitionReason")),
+        Flag(Boss, TEXT("bCanTurn")) ? TEXT("가능") : TEXT("제한"),
+        Flag(Boss, TEXT("bPhysicalStrikeOpen")) ? TEXT("열림") : TEXT("닫힘"),
+        Number(Boss, TEXT("CurrentHealth")), *Text(Boss, TEXT("UtilityChoice")),
+        Number(Boss, TEXT("UtilityDistance")), static_cast<int32>(Number(Boss, TEXT("UtilityDecisionCount"))));
+    const FArrayProperty* Scores = FindFProperty<FArrayProperty>(Boss->GetClass(), TEXT("ActionWeights"));
+    const FArrayProperty* Actions = FindFProperty<FArrayProperty>(Boss->GetClass(), TEXT("Actions"));
+    const FNumericProperty* ScoreType = Scores ? CastField<FNumericProperty>(Scores->Inner) : nullptr;
+    const FObjectPropertyBase* ActionType = Actions ? CastField<FObjectPropertyBase>(Actions->Inner) : nullptr;
+    if (ScoreType && ScoreType->IsFloatingPoint() && ActionType)
+    {
+        FScriptArrayHelper Values(Scores, Scores->ContainerPtrToValuePtr<void>(Boss));
+        FScriptArrayHelper Cards(Actions, Actions->ContainerPtrToValuePtr<void>(Boss));
+        const bool bHasDecision = Number(Boss, TEXT("UtilityDecisionCount")) > 0 && Values.Num() == Cards.Num();
+        const TCHAR* Labels[] = {TEXT("왼손"), TEXT("오른손"), TEXT("어퍼"), TEXT("휩쓸기"),
+            TEXT("3타"), TEXT("가드깨기"), TEXT("슈퍼맨"), TEXT("접근"), TEXT("점프"), TEXT("2타")};
+        for (int32 I = 0; I < Cards.Num(); ++I)
+        {
+            UObject* Card = ActionType->GetObjectPropertyValue(Cards.GetRawPtr(I));
+            const int32 Id = static_cast<int32>(Number(Card, TEXT("ActionId"), -1));
+            const FString Label = Id >= 0 && Id < UE_ARRAY_COUNT(Labels) ? Labels[Id] : Text(Card, TEXT("DisplayName"));
+            Result += Label + (bHasDecision
+                ? FString::Printf(TEXT(" %.1f"), ScoreType->GetFloatingPointPropertyValue(Values.GetRawPtr(I))) : TEXT(" —"));
+            Result += (I % 3 == 2 || I == Cards.Num()-1) ? TEXT("\n") : TEXT(" · ");
+        }
+        if (!bHasDecision) Result += TEXT("점수 판단 전\n");
+        else Result += TEXT("점수는 마지막 선택 시점 기준\n");
+    }
+    Result += FString::Printf(TEXT("최근 6초: 회피 %d회 · 가드 %.1f초"),
+        static_cast<int32>(Number(Boss, TEXT("RecentDodgeCount"))), Number(Boss, TEXT("RecentGuardSeconds")));
+    return Result;
 }
 
 namespace

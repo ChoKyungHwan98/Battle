@@ -61,6 +61,7 @@ class BATTLEBOSSPLANNING_API UBossCombatIntentLibrary : public UBlueprintFunctio
     GENERATED_BODY()
 public:
     UFUNCTION(BlueprintCallable, Category="Boss|Intent") static void BeginSelectedAttackIntent(AActor* Boss);
+    UFUNCTION(BlueprintPure, Category="Boss|Intent") static FString DescribeCombatDebug(AActor* Boss);
     UFUNCTION(BlueprintCallable, Category="Boss|Intent") static void RecordAttackRecoveryEnd(AActor* Boss);
     UFUNCTION(BlueprintPure, Category="Boss|Intent") static bool IsAttackIntentActive(AActor* Boss);
     UFUNCTION(BlueprintPure, Category="Boss|Intent") static float AdjustIntentCandidate(AActor* Boss, int32 Slot, float Score);
