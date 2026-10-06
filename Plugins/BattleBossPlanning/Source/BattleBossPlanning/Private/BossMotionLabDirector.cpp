@@ -29,7 +29,8 @@ namespace
 {
 constexpr TCHAR ClipRoot[] = TEXT("/Game/ParagonCrunch/Characters/Heroes/Crunch/Animations/");
 constexpr float Distances[] = { 175.f, 300.f, 350.f, 400.f, 500.f, 1000.f };
-const TCHAR* const PunchModes[] = { TEXT("실전 자동"), TEXT("기본 제자리 · 몸 전진 없음"), TEXT("한 발 전진 · 최대 145cm") };
+const TCHAR* const PunchModes[] = { TEXT("실전 자동"), TEXT("기본 제자리 · 몸 전진 없음"),
+    TEXT("기존 전진 · 최대 145cm"), TEXT("오른발 디딤 → 왼손 · 1키 전용") };
 const TCHAR* const FocusNames[] = {
     TEXT("Ability_Combo_01"), TEXT("Ability_Combo_01_Slow"), TEXT("Ability_Combo_01_Recovery"),
     TEXT("Ability_Combo_02"), TEXT("Ability_Combo_02_Slow"), TEXT("Ability_Combo_02_Recovery"),
@@ -146,6 +147,7 @@ TSharedRef<SWidget> UBossMotionLabOverlay::RebuildWidget()
     ControlsText->SetText(FText::FromString(
         TEXT("\nJ 사거리 측정 / 실전 조건 검사 전환\n")
         TEXT("\n주먹 비교  L 전진 방식 변경 → 1 왼손 / 2 오른손\n")
+        TEXT("새 모션: 오른발 디딤 → 왼손 (L로 선택, 1키)\n")
         TEXT("실전 행동  3 어퍼컷\n")
         TEXT("               4 휩쓸기 · 5 연계 · 6 가드 크래시\n")
         TEXT("               7 슈퍼맨 · 8 접근 · 9 점프\n")
@@ -427,7 +429,7 @@ void ABossMotionLabDirector::RequestAction(int32 Index)
     DamageEventCount = 0;
     DamageTotal = 0.f;
     ManualActionIndex = Index;
-    ManualPunchMode = (Index == 0 || Index == 1) ? PunchMode : 0;
+    ManualPunchMode = Index == 0 || (Index == 1 && PunchMode != 3) ? PunchMode : 0;
     ManualActionStartLocation = BossActor->GetActorLocation();
     ManualActionStartDistance = FVector::Dist2D(ManualActionStartLocation, PlayerActor->GetActorLocation());
     FirstHandContactAt = FirstWindowOpenAt = LastHandContactAt = ClosestHandGapAt = LastContactSampleAt = -1.f;
@@ -445,7 +447,7 @@ void ABossMotionLabDirector::RequestAction(int32 Index)
         Intent->RegisterComponent();
         Intent->AddTickPrerequisiteActor(BossActor);
     }
-    Intent->MotionLabPunchMode = (Index == 0 || Index == 1) ? PunchMode : 0;
+    Intent->MotionLabPunchMode = ManualPunchMode;
     Intent->bLabRangeMeasurementAction = bRangeMeasurement;
     // A numbered lab request measures exactly one action. The boss's ordinary
     // follow-up chooser clears this flag at the end of that action.
@@ -462,11 +464,14 @@ void ABossMotionLabDirector::RequestAction(int32 Index)
             if ((*It)->HasAnyPropertyFlags(CPF_Parm) && !(*It)->HasAnyPropertyFlags(CPF_ReturnParm))
                 if (FIntProperty* Int = CastField<FIntProperty>(*It)) { Int->SetPropertyValue_InContainer(Params.GetStructMemory(), Index); break; }
         {
-            TGuardValue<bool> RequestScope(Intent->bLabStartRequestScope, bRangeMeasurement);
+            TGuardValue<bool> RequestScope(Intent->bLabStartRequestScope, true);
             BossActor->ProcessEvent(Fn, Params.GetStructMemory());
         }
         if (ReadBool(BossActor, TEXT("bActionStartAllowed")))
         {
+            if (ManualPunchMode == 3)
+                if (ACharacter* Boss = Cast<ACharacter>(BossActor))
+                    Boss->GetCharacterMovement()->SetMovementMode(MOVE_Walking);
             LastResult = FString::Printf(TEXT("%d키 %s 실행 중"), (Index + 1) % 10,
                 bRangeMeasurement ? TEXT("사거리 측정") : TEXT("실전 행동"));
             UE_LOG(LogTemp,Display,TEXT("MotionLab request slot=%d punchMode=%d measurement=%d startDistance=%.1fcm"),
@@ -639,8 +644,9 @@ void ABossMotionLabDirector::DrawOverlay() const
         FString::Printf(TEXT("%.2f초"), FirstWindowOpenAt) : TEXT("없음");
     const bool bPunch = ManualActionIndex == 0 || ManualActionIndex == 1;
     const FString ContactLine = bPunch
-        ? FString::Printf(TEXT("본 테스트: %s\n몸 전진  %.0f cm · 요청  %.0f cm\n손 접촉  %s  ·  판정 시작  %s\n"),
+        ? FString::Printf(TEXT("본 테스트: %s\n몸 전진 %.0f cm · %s %.0f cm\n손 접촉 %s · 판정 시작 %s\n"),
             PunchModes[ManualPunchMode],IsValid(BossActor) ? FVector::Dist2D(BossActor->GetActorLocation(),ManualActionStartLocation) : 0.f,
+            ManualPunchMode == 3 ? TEXT("추가 수동 전진") : TEXT("요청"),
             ReadNumber(BossActor,TEXT("AttackStepDistance")),*Contact,*Window)
         : TEXT("");
     const FString Text = FString::Printf(
@@ -688,6 +694,12 @@ void ABossMotionLabDirector::Tick(float DeltaSeconds)
         if (bReady && !bMontagePlaying && GetWorld()->GetTimeSeconds() - ManualActionStartTime > 0.35f)
         {
             bManualActionActive = false;
+            if (ManualPunchMode == 3)
+                if (ACharacter* Boss = Cast<ACharacter>(BossActor))
+                {
+                    Boss->GetCharacterMovement()->StopMovementImmediately();
+                    Boss->GetCharacterMovement()->DisableMovement();
+                }
             if (UBossCombatIntentComponent* Intent = BossActor->FindComponentByClass<UBossCombatIntentComponent>())
                 Intent->bLabRangeMeasurementAction = false;
             BossActor->SetActorTickEnabled(false);

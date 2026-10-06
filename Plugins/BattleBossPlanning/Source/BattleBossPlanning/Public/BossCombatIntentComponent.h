@@ -20,7 +20,7 @@ public:
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     bool IsActive() const { return bActive || bReassessing; }
     float FailureMultiplier(int32 Slot) const;
-    /** Transient test override; the caller must be the MotionLab fixture. 0=combat, 1=no travel, 2=one step. */
+    /** Lab override: 0=combat, 1=no travel, 2=manual step, 3=right-foot root-motion left punch. */
     int32 MotionLabPunchMode = 0;
     /** Runtime-only fixture permissions. Start override exists only inside a manual lab request. */
     bool bLabStartRequestScope = false;
@@ -78,6 +78,8 @@ public:
     /** Bypasses distance/facing/cooldown starts only in the scoped MotionLab manual request. */
     UFUNCTION(BlueprintPure, Category="Boss|Motion Lab") static bool IsLabStartLimitOverride(AActor* Boss);
     static bool IsLabRangeMeasurementAction(AActor* Boss);
+    /** Called after validated ordinary configuration, before entering attack. Never changes Arena choices. */
+    UFUNCTION(BlueprintCallable, Category="Boss|Motion Lab") static void ConfigureLabRightFootPunch(AActor* Boss);
     UFUNCTION(BlueprintCallable, Category="Boss|Intent") static void BeginSelectedAttackIntent(AActor* Boss);
     UFUNCTION(BlueprintPure, Category="Boss|Intent") static FString DescribeCombatDebug(AActor* Boss);
     /** One finite step in an ordinary punch; sampled once when the step opens. */

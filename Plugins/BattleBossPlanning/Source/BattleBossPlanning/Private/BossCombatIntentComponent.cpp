@@ -768,6 +768,11 @@ bool CanLinkMeasuredTwoHit(bool bMeasurement, bool bTargetAvailable, bool bComba
 {
     return bTargetAvailable && (bMeasurement || bCombatLink);
 }
+
+bool LabRightFootPolicy(const FString& LevelName, const FString& Source, bool bRequestScope, int32 Mode, int32 ActionId)
+{
+    return LabMeasurementPolicy(LevelName, Source, true) && bRequestScope && Mode == 3 && ActionId == 0;
+}
 }
 
 bool UBossCombatIntentLibrary::IsLabRangeMeasurementAction(AActor* Boss)
@@ -783,6 +788,25 @@ bool UBossCombatIntentLibrary::IsLabStartLimitOverride(AActor* Boss)
     if (!IsValid(Boss)) return false;
     const UBossCombatIntentComponent* Intent = Boss->FindComponentByClass<UBossCombatIntentComponent>();
     return Intent && Intent->bLabStartRequestScope && IsLabRangeMeasurementAction(Boss);
+}
+
+void UBossCombatIntentLibrary::ConfigureLabRightFootPunch(AActor* Boss)
+{
+    if (!IsValid(Boss) || !StateIs(Boss, TEXT("Boss.Combat.Ready"))) return;
+    const auto* Intent = Boss->FindComponentByClass<UBossCombatIntentComponent>();
+    if (!Intent || !LabRightFootPolicy(UGameplayStatics::GetCurrentLevelName(Boss, true),
+        Text(Boss, TEXT("AttackRequestSource")), Intent->bLabStartRequestScope, Intent->MotionLabPunchMode,
+        static_cast<int32>(Number(Object(Boss, TEXT("ActiveAction")), TEXT("ActionId"), -1)))) return;
+    UObject* Card = LoadObject<UObject>(nullptr, TEXT("/Game/BossArena/Boss/AI/Actions/DA_Lab_Left_RightFootPlant.DA_Lab_Left_RightFootPlant"));
+    FObjectPropertyBase* Active = FindFProperty<FObjectPropertyBase>(Boss->GetClass(), TEXT("ActiveAction"));
+    if (!IsValid(Card) || !IsValid(Object(Card, TEXT("Montage"))) || !Active) return;
+    Active->SetObjectPropertyValue_InContainer(Boss, Card);
+    // The new animation root owns travel. Do not also run the legacy manual step.
+    SetFlag(Boss, TEXT("bPunchFootSync"), false);
+    SetFlag(Boss, TEXT("bPunchFootSampleValid"), false);
+    SetNumber(Boss, TEXT("AttackAdvanceBudget"), 0);
+    SetNumber(Boss, TEXT("AttackAdvanceStepCount"), 0);
+    SetText(Boss, TEXT("UtilityChoice"), Text(Card, TEXT("DisplayName")));
 }
 
 void UBossCombatIntentLibrary::EnsureActionCooldownCapacity(AActor* Boss)
@@ -878,6 +902,18 @@ bool UBossCombatIntentLibrary::ContinueTwoHitOrRecover(AActor* Boss)
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossLabRightFootPolicyTest,"Battle.MotionLab.RightFootPunchPolicy",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBossLabRightFootPolicyTest::RunTest(const FString& Parameters)
+{
+    TestTrue(TEXT("Scoped manual left punch uses the new lab motion"), LabRightFootPolicy(TEXT("Lvl_BossMotionLab"),TEXT("manual"),true,3,0));
+    TestFalse(TEXT("Arena is unchanged"), LabRightFootPolicy(TEXT("Lvl_Arena_01"),TEXT("manual"),true,3,0));
+    TestFalse(TEXT("Other modes retain their motion"), LabRightFootPolicy(TEXT("Lvl_BossMotionLab"),TEXT("manual"),true,2,0));
+    TestFalse(TEXT("Right punch is unchanged"), LabRightFootPolicy(TEXT("Lvl_BossMotionLab"),TEXT("manual"),true,3,1));
+    TestFalse(TEXT("Automatic choice is unchanged"), LabRightFootPolicy(TEXT("Lvl_BossMotionLab"),TEXT("utility"),true,3,0));
+    TestFalse(TEXT("Permission cannot persist beyond the request"), LabRightFootPolicy(TEXT("Lvl_BossMotionLab"),TEXT("manual"),false,3,0));
+    return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossLabMeasurementPolicyTest,"Battle.MotionLab.RangeMeasurementPolicy",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FBossLabMeasurementPolicyTest::RunTest(const FString& Parameters)
