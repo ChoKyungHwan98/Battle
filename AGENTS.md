@@ -1,5 +1,7 @@
 # Battle workspace
 
+- A duplicated ControlRigBlueprint needs recompile_vm() before Sequencer instantiates its generated class; a zero-layer export can appear correct while the rig never executes. Verify a keyed correction in the baked result, not just channel counts. Native BasicIK uses reference-chain lengths, which can differ from animated source lengths.
+
 - UE5.8 EulerTransform controls require ControlRigSequencerLibrary.set_local_control_rig_euler_transform(s); SetLocalControlRigTransform silently skips them. Verify actual channel key counts, and unwrap equivalent Euler representations before interpolating across ±180°.
 - Exporting an open Sequencer spawnable through SequencerTools.export_anim_sequence can report no skeletal mesh. Use the reflected ControlRigEditor.ControlRigSequencerEditorLibrary ExportAnimSequenceFromSequencer via CDO.call_method(function_name, argument_tuple); set AnimSeqExportOption.custom_display_rate as well as custom_frame_rate when exporting custom frame ranges.
 - VibeUE GetTotalRootMotion/GetRootMotionAtTime build an extraction context without a time range and can return identity for valid moving root keys in UE5.8. Verify raw root keys with root extraction disabled temporarily and measure actual capsule displacement in PIE; restore the original settings afterwards.
