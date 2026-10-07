@@ -350,6 +350,24 @@ def copy_transform(value):
     return t
 
 
+def attack_foot_target(time, side, initial):
+    """One leading right step; only a low trailing-foot adjustment afterwards.
+
+    Hold the resulting stance through recovery. Do not schedule the old two
+    recovery lifts just to reconstruct the starting left-leading stance.
+    """
+    foot = copy_transform(initial)
+    if side == 'r':
+        step = between(time, .16, .60)
+        foot.translation = initial.translation + unreal.Vector(
+            0., (155. - initial.translation.y) * step, 26. * math.sin(math.pi * step))
+    else:
+        follow = between(time, .60, .84)
+        foot.translation = initial.translation + unreal.Vector(
+            0., 60. * follow, 2. * math.sin(math.pi * follow))
+    return foot
+
+
 def sync_ik_targets():
     """Keep the game's existing LegIK targets aligned with the authored feet."""
     rig = unreal.EditorAssetLibrary.load_asset(RIG)
@@ -449,21 +467,7 @@ def prepare_attack():
         local['pelvis'] = pelvis
         frame_controls = {name + '_fk': local[name] for name in names}
         for side in ['l', 'r']:
-            foot = copy_transform(feet['foot_' + side])
-            if side == 'r':
-                step = between(t, .16, .60)
-                foot.translation = foot.translation + unreal.Vector(0., (155 - foot.translation.y) * step,
-                    26 * math.sin(math.pi * step))
-                settle = between(t, 1.65, 2.10)
-                foot.translation = foot.translation + unreal.Vector(0.,
-                    (feet['foot_r'].translation.y + 205 / 1.3 - 155) * settle,
-                    8 * math.sin(math.pi * settle))
-            else:
-                release = between(t, .60, .74)
-                reset = between(t, 1.45, 1.95)
-                foot.translation = foot.translation + unreal.Vector(0.,
-                    97 * release + (205 / 1.3 - 97) * reset,
-                    11 * math.sin(math.pi * release) + 14 * math.sin(math.pi * reset))
+            foot = attack_foot_target(t, side, feet['foot_' + side])
             frame_controls['foot_' + side + '_ik'] = foot
             pole = unreal.Transform()
             pole.translation = foot.translation + unreal.Vector(0., 85., 70.)
