@@ -196,6 +196,21 @@ def key_step():
     print('KEYED one right step, original left footprint, no added upper-body timing')
 
 
+def mark_full_body(sequence):
+    """Keep root-motion speed from replacing the authored legs with jogging."""
+    curve = unreal.AnimationCurveIdentifier()
+    curve.set_curve_identifier('FullBody',unreal.RawCurveTrackTypes.RCT_FLOAT)
+    controller = sequence.get_editor_property('controller')
+    if not unreal.AnimationLibrary.does_curve_exist(sequence,'FullBody',unreal.RawCurveTrackTypes.RCT_FLOAT):
+        assert controller.add_curve(curve)
+    keys = [unreal.RichCurveKey(time=t,value=1.,interp_mode=unreal.RichCurveInterpMode.RCIM_CONSTANT)
+        for t in [0.,sequence.get_play_length()]]
+    assert controller.set_curve_keys(curve,keys)
+    times,values = unreal.AnimationLibrary.get_float_keys(sequence,'FullBody')
+    assert len(times)==2 and all(abs(v-1.)<.0001 for v in values)
+    print('MODIFIED FullBody curve:',sequence.get_path_name(),list(times),list(values))
+
+
 def bake_validate():
     common.require_editor()
     result = common.bake(PLAN['sequence'],PLAN['binding'],BAKED,PLAN['last_frame'])
@@ -225,6 +240,7 @@ def bake_validate():
     result.set_editor_property('enable_root_motion',True)
     result.set_editor_property('force_root_lock',False)
     result.set_editor_property('root_motion_root_lock',unreal.RootMotionRootLock.ANIM_FIRST_FRAME)
+    mark_full_body(result)
     common.save(result)
     PLAN['report']=report
     return report

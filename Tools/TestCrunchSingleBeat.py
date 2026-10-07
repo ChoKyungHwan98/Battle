@@ -9,6 +9,9 @@ def sample(delta):
     fixture.sample(delta)
     w,b,p=fixture.actors()
     fixture.SAMPLES[-1]['attack_elapsed']=unreal.GameplayStatics.get_time_seconds(w)-b.get_editor_property('AttackStartedAt')
+    anim=b.get_component_by_class(unreal.SkeletalMeshComponent).get_anim_instance()
+    fixture.SAMPLES[-1]['full_body']=bool(anim.get_editor_property('FullBody'))
+    fixture.SAMPLES[-1]['accelerating']=bool(anim.get_editor_property('IsAccelerating'))
 
 
 def begin():
@@ -26,6 +29,18 @@ def played():
 def first_window():
     return min((s['attack_elapsed'] for s in fixture.SAMPLES
         if s['montage']=='AM_Crunch_RightStep_SingleBeat' and s['open']),default=999.)
+
+
+def locomotion_override_frames():
+    return sum(1 for s in fixture.SAMPLES
+        if s['montage']=='AM_Crunch_RightStep_SingleBeat' and s['montage_time']>.1
+        and s['accelerating'] and not s['full_body'])
+
+
+def moving_full_body_frames():
+    return sum(1 for s in fixture.SAMPLES
+        if s['montage']=='AM_Crunch_RightStep_SingleBeat' and s['montage_time']>.1
+        and s['accelerating'] and s['full_body'])
 
 
 def finish():
@@ -48,9 +63,13 @@ def scenario():
         {'action':'python_assert_number','expression':m+'.finish()','operator':'eq','expected':1},
         {'action':'python_assert_number','expression':m+'.played()','operator':'eq','expected':1},
         {'action':'python_assert_number','expression':m+'.first_window()','operator':'gt','expected':.4},
-        {'action':'python_assert_number','expression':m+'.first_window()','operator':'lt','expected':.75}]
+        {'action':'python_assert_number','expression':m+'.first_window()','operator':'lt','expected':.75},
+        {'action':'python_assert_number','expression':m+'.locomotion_override_frames()','operator':'eq','expected':0},
+        {'action':'python_assert_number','expression':m+'.moving_full_body_frames()','operator':'gt','expected':0}]
     return {'name':'Crunch single-beat v5: actual montage and original tempo',
         'dependencies':['Tools/TestCrunchSingleBeat.py',
+            'Tools/TestDonorPunch.py',
+            'Content/BossArena/Boss/Animation/ABP_Boss_Crunch.uasset',
             'Content/BossArena/Boss/Authoring/AS_Crunch_RightStep_SingleBeat.uasset',
             'Content/BossArena/Boss/Authoring/AM_Crunch_RightStep_SingleBeat.uasset',
             'Content/BossArena/Boss/AI/Actions/DA_Lab_Left_RightFootPlant.uasset'],
