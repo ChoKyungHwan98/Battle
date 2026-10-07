@@ -1,5 +1,7 @@
 # Battle workspace
 
+- Duplicating a baked LevelSequence/AnimSequence carries its forward/reverse bake links. Retarget the copies' LevelSequenceAnimSequenceLinkItem.path_to_anim_sequence and AnimSequenceLevelSequenceLink.path_to_level_sequence before export; otherwise Epic's link replacement can unlink the previous output. Compare stored channel keys for preservation, since evaluated rig Euler transforms can differ by floating-point noise.
+
 - A duplicated ControlRigBlueprint needs recompile_vm() before Sequencer instantiates its generated class; a zero-layer export can appear correct while the rig never executes. Verify a keyed correction in the baked result, not just channel counts. Native BasicIK uses reference-chain lengths, which can differ from animated source lengths.
 
 - UE5.8 EulerTransform controls require ControlRigSequencerLibrary.set_local_control_rig_euler_transform(s); SetLocalControlRigTransform silently skips them. Verify actual channel key counts, and unwrap equivalent Euler representations before interpolating across ±180°.
