@@ -1,5 +1,7 @@
 # Battle workspace
 
+- unreal.Quat() constructs (0,0,0,0), not identity; use unreal.Quat(x=0,y=0,z=0,w=1) for transform maths. When adding Root Motion to a formerly non-root-motion punch, preserve authored root yaw in direct root children before fixing root rotation; otherwise extraction changes the visible body turn even if local arm keys match. Editor preview actors need override_animation_data(..., position=...) because play_animation/set_position alone can reset to the reference pose on editor ticks.
+
 - Duplicating a baked LevelSequence/AnimSequence carries its forward/reverse bake links. Retarget the copies' LevelSequenceAnimSequenceLinkItem.path_to_anim_sequence and AnimSequenceLevelSequenceLink.path_to_level_sequence before export; otherwise Epic's link replacement can unlink the previous output. Compare stored channel keys for preservation, since evaluated rig Euler transforms can differ by floating-point noise.
 
 - A duplicated ControlRigBlueprint needs recompile_vm() before Sequencer instantiates its generated class; a zero-layer export can appear correct while the rig never executes. Verify a keyed correction in the baked result, not just channel counts. Native BasicIK uses reference-chain lengths, which can differ from animated source lengths.
