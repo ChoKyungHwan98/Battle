@@ -174,20 +174,88 @@ float ComboShare(int32 Dodges)
     return Dodges >= 3 ? 1.f : (Dodges >= 2 ? .5f : .3f);
 }
 
-// ---- 연계 --------------------------------------------------------------------------------------------------------
-// 같은 일곱 가지 공격만 하나씩 나오면 금방 익숙해진다. 공격 뒤에 가끔 후딜을 끊고 정해진 다음 공격으로 잇는다.
-// 이어지는 공격도 제 준비 동작을 다 하므로 보고 피할 수 있다. 다만 "한 번 피했으니 내 차례"라고 바로 들어오면 맞는다.
-constexpr int32 OverheadId = 10;                  // 오른손 내려찍기(새 공격)
-// 왼손과 오른손은 갈래가 둘이다(Roll 0..1): 늘 같은 것으로 이어지면 연계도 금방 읽힌다.
-int32 ChainFollowUp(int32 FinishedId, float Roll = 0.f)
+// ---- 이어 치기(몰아치기) ------------------------------------------------------------------------------------------
+// 실제 플레이 기록(125초, 공격 32회): 공격 사이가 2~4초인 경우가 31번 중 20번이었다. "한 대 치고 서 있고, 한 대 치고 서 있다."
+// 정해진 표(왼손 다음은 어퍼컷)로 잇던 연계는 "다음 공격이 그 자리에서 닿을 때만"이라 회피하는 플레이어에게는 거의 안 나왔다(1회).
+// 이제 무엇을 몇 번 이을지를 계획(GOAP)이 짠다:
+//   Utility가 정하는 것: 첫 공격, 그리고 이번에 몇 번 칠지(1~3).
+//   GOAP가 짜는 것: 남은 공격의 순서. 행동마다 조건(닿는 거리, 각도, 아직 안 쓴 공격)과 결과(달려들면 붙는다, 제자리면 조금 벌어진다)가 있고,
+//                  "마지막은 큰 한 방으로 끝낸다"는 목표에 가장 싸게 닿는 순서를 고른다.
+//   HFSM이 지키는 것: 다음 타는 열린 후딜에서만 시작하고, 몰아치기의 마지막 공격은 후딜을 끝까지 보낸다.
+// 플레이어가 그 사이 움직이므로, 타마다 열린 후딜에서 남은 순서를 지금 상황으로 다시 짠다.
+constexpr int32 OverheadId = 10;                  // 오른손 내려찍기
+struct FStringStep { int32 Id = -1; bool bRunIn = false; };
+
+bool IsFinisher(int32 Id) { return Id == 2 || Id == 3 || Id == OverheadId; }      // 어퍼컷, 휩쓸기, 내려찍기
+
+// 제자리에서 이 공격이 닿는 가장 먼 거리.
+float PlantedReach(int32 Id)
 {
-    switch (FinishedId)
+    switch (Id) { case 0: return 344.f; case 1: return 320.f; case 2: return 295.f; case 3: return 360.f; case OverheadId: return 285.f; default: return 0.f; }
+}
+
+// 이 걸음이 지금 조건에서 가능한가. Angle은 플레이어가 정면에서 벗어난 각도(절댓값).
+// 제자리 공격은 돌아서며 칠 수 있어서 100도까지(휩쓸기는 넓어서 120도), 달려드는 공격은 방향을 크게 못 바꿔서 45도까지.
+bool StringStepPossible(const FStringStep& Step, float Distance, float Angle)
+{
+    if (!FMath::IsFinite(Distance) || !FMath::IsFinite(Angle)) return false;
+    if (Step.bRunIn) return MidVersionStart(Step.Id) > 0.f && Step.Id != 4 && Distance >= MidVersionStart(Step.Id) && Distance <= MidVersionReach(Step.Id) && Angle <= 45.f;
+    return PlantedReach(Step.Id) > 0.f && Distance <= PlantedReach(Step.Id) && Angle <= (Step.Id == 3 ? 120.f : 100.f);
+}
+
+// 이 걸음의 비용. 손이 자연스럽게 이어지면 싸고(왼손→오른손, 오른손→왼손, 오른손→같은 손 내려찍기, 왼손→어퍼컷, 2연타→휩쓸기),
+// 마지막이 큰 한 방이 아니거나 큰 한 방이 중간에 오면 비싸다. Noise(0..1)는 같은 상황에서도 순서가 달라지게 하는 작은 흔들림이다.
+float StringStepCost(int32 PreviousId, const FStringStep& Step, bool bLast, float Noise)
+{
+    const bool bFlows = (PreviousId == 0 && (Step.Id == 1 || Step.Id == 2)) || (PreviousId == 1 && (Step.Id == 0 || Step.Id == OverheadId))
+        || (PreviousId == 9 && Step.Id == 3);
+    float Cost = (Step.bRunIn ? 1.5f : 1.f) + (bFlows ? 0.f : .4f) + FMath::Clamp(Noise, 0.f, 1.f) * .5f;
+    if (bLast && !IsFinisher(Step.Id)) Cost += 1.f;
+    if (!bLast && IsFinisher(Step.Id)) Cost += 2.f;
+    return Cost;
+}
+
+// 남은 Hits번의 공격 순서를 짠다. Used: 이번 몰아치기에서 이미 친 공격. Available(Id, bRunIn): 그 카드를 지금 쓸 수 있는가(쿨다운 등).
+// 전부는 못 이어도 이을 수 있는 데까지 잇는다(가장 긴 것 중 가장 싼 것). 아무것도 안 되면 빈 배열.
+TArray<FStringStep> PlanAttackString(float Distance, float Angle, int32 Hits, int32 PreviousId, const TArray<int32>& Used,
+    TFunctionRef<bool(int32, bool)> Available, TFunctionRef<float()> Noise)
+{
+    static const FStringStep Options[] = {{0, false}, {1, false}, {2, false}, {3, false}, {OverheadId, false}, {0, true}, {1, true}, {2, true}};
+    TArray<FStringStep> Best;
+    float BestCost = TNumericLimits<float>::Max();
+    if (Hits <= 0) return Best;
+    Hits = FMath::Min(Hits, 2);
+    for (const FStringStep& First : Options)
     {
-    case 0: return Roll < .6f ? 2 : 1;             // 왼손 → 어퍼컷(옆으로 쓸고 아래에서 올려친다) / 오른손(원투)
-    case 1: return Roll < .6f ? OverheadId : 0;    // 오른손 → 내려찍기(같은 손으로 위에서) / 왼손(되돌려 친다)
-    case 9: return 3;                              // 2연타 → 휩쓸기: 좁게 두 번, 넓게 한 번
-    default: return -1;
+        if (Used.Contains(First.Id) || !StringStepPossible(First, Distance, Angle) || !Available(First.Id, First.bRunIn)) continue;
+        const float FirstNoise = Noise();
+        // 결과: 달려들면 붙고(약 230cm) 정면이 된다. 제자리에서 치면 플레이어가 조금 물러난다고 본다(+30cm).
+        const float After = First.bRunIn ? 230.f : Distance + 30.f;
+        bool bExtended = false;
+        if (Hits >= 2)
+            for (const FStringStep& Second : Options)
+            {
+                if (Second.Id == First.Id || Used.Contains(Second.Id) || !StringStepPossible(Second, After, 0.f) || !Available(Second.Id, Second.bRunIn)) continue;
+                bExtended = true;
+                const float Cost = StringStepCost(PreviousId, First, false, FirstNoise) + StringStepCost(First.Id, Second, true, Noise());
+                if (Best.Num() < 2 || Cost < BestCost) { Best = {First, Second}; BestCost = Cost; }
+            }
+        if (!bExtended && Best.Num() < 2)
+        {
+            const float Cost = StringStepCost(PreviousId, First, true, FirstNoise);
+            if (Best.Num() == 0 || Cost < BestCost) { Best = {First}; BestCost = Cost; }
+        }
     }
+    return Best;
+}
+
+// 이번에 몇 번 칠지(Utility의 몫). 왼손·오른손으로 시작했을 때만 길게 잇는다. 2연타는 한 번 더(휩쓸기 등), 나머지는 그 자체로 끝이다:
+// 연속기(잽잽훅)는 이미 세 번이고, 큰 한 방·돌진·가드 브레이크는 하나로 읽혀야 하는 공격이다.
+int32 ChooseStringLength(int32 FirstId, float Roll, float TwoShare, float ThreeShare)
+{
+    if (FirstId == 9) return Roll < TwoShare + ThreeShare ? 2 : 1;
+    if (FirstId != 0 && FirstId != 1) return 1;
+    return Roll < ThreeShare ? 3 : (Roll < ThreeShare + TwoShare ? 2 : 1);
 }
 
 // 연계로 나온 공격에서 한 번 더 이을 확률은 절반이고, 세 번째 공격에서는 끝난다. 반격할 틈은 반드시 돌아온다.
@@ -218,12 +286,6 @@ bool PursuitHolds(float Distance, float Dot, bool bPlayerDown, float MinDistance
 bool FacingStepWanted(float AbsAngle, float MinAngle, float MaxAngle)
 {
     return FMath::IsFinite(AbsAngle) && AbsAngle >= MinAngle && AbsAngle <= MaxAngle;
-}
-
-// 연계를 실제로 이을 것인가: 플레이어가 앞에 있고, 다음 공격이 그 자리에서 바로 닿을 때만. 걸어가서 잇지 않는다.
-bool ChainHolds(float Dot, float GapToFollowUp, bool bFollowUpReady, bool bPlayerDown)
-{
-    return bFollowUpReady && !bPlayerDown && FMath::IsFinite(Dot) && Dot >= .5f && FMath::IsNearlyZero(GapToFollowUp);
 }
 
 // 플레이어가 물러나는 중인가(초당 120cm 넘게 멀어짐).
@@ -545,6 +607,8 @@ void UBossCombatIntentComponent::BeginSelectedIntent()
     Advance();
 }
 
+namespace { float RearTurnSpeedFor(float Angle, float ImpactSeconds, float MaxSpeed); float FirstImpactSeconds(const UObject* Card); }
+
 void UBossCombatIntentComponent::RecordAttackRecoveryEnd()
 {
     AActor* Boss = GetOwner();
@@ -565,17 +629,25 @@ void UBossCombatIntentComponent::RecordAttackRecoveryEnd()
     if (Chained != INDEX_NONE)
     {
         SetText(Boss, TEXT("AttackRequestSource"), TEXT("chain"));
-        if (RequestSlot(Chained))
+        if (RequestLinkSlot(Chained, bLinkPivot))
         {
             bChainedAttack = true;
             ChainDepth = Depth + 1;
+            if (LinkAngle > 15.f)
+            {
+                // 플레이어가 비껴 있으면 준비 동작 동안 고르게 돌아서 타격 직전에 정면이 된다(돌아서며 친다).
+                bRearResponseActive = true;
+                RearTurnRate = RearTurnSpeedFor(LinkAngle, FirstImpactSeconds(Object(Boss, TEXT("ActiveAction"))), RearResponseTurnSpeed);
+            }
             SetFlag(Boss, TEXT("bPostAttackProbePending"), false);
             Invoke(Boss, TEXT("RecordCombatQA"), TEXT("chain"));
             return;
         }
     }
     if (bPursuit) ChainDepth = Depth + 1;      // 추격 뒤의 공격도 몰아치기의 일부로 센다
-    TryRearResponse();
+    // 몰아치기가 끝났다: 긴 후딜을 다 보낸 뒤에도 뒤쪽 대응으로 덮지 않는다. 다 피한 플레이어의 차례다.
+    const bool bStringEnded = Depth >= 1 && !bPursuit;
+    if (!bStringEnded) TryRearResponse();
     if (TryFacingStep()) return;
     if (!bPursuit) TryFootwork();      // 쫓는 중에는 발놀림으로 쉬지 않는다
 }
@@ -687,6 +759,8 @@ bool UBossCombatIntentComponent::TryFacingStep()
     return true;
 }
 
+namespace { float BowKick(float PeakDegrees); }
+
 // 후딜이 끝난 순간, 다음 공격을 고르기 전에 발을 옮길지 정한다. 옮긴다면 Position 상태로 들어가 계획한 걸음들을 차례로 하고,
 // 끝나면 Ready로 돌아가 그 자리에서 Utility가 새로 고른다.
 void UBossCombatIntentComponent::TryFootwork()
@@ -705,6 +779,35 @@ void UBossCombatIntentComponent::TryFootwork()
     const float Dot = FVector::DotProduct(Boss->GetActorForwardVector(), Delta.GetSafeNormal2D());
     if (!FootworkAllowed(Distance, Dot, FootworkMaxDistance, static_cast<float>(Number(Boss, TEXT("RecentGuardSeconds"))))) return;
     const bool bCrowded = Distance < CrowdDistance;
+    // 숙이며 빠지기: 붙어서 맞고 있으면 걸음 대신 상체를 숙이고 빠르게 뒤로 빠진다. 묵직하지만 굼뜨지는 않다.
+    if (Distance < ComfortDistance && HitsTakenWithin(2.f) >= SwayHits && FMath::FRand() < SwayChance)
+    {
+        const FVector Floor = BossLocation - FVector(0, 0, Boss->GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+        if (NavOpen(this, Floor, Floor - Delta.GetSafeNormal2D() * 180.f)
+            && TransitionState(Boss, TEXT("Boss.Combat.Ready"), TEXT("Boss.Combat.Position"), TEXT("숙이며 빠지기")))
+        {
+            if (AAIController* Controller = Cast<AAIController>(Boss->GetController())) Controller->StopMovement();
+            FootworkLegs.Reset();
+            FootworkLegs.Add(static_cast<uint8>(EBossPositionAction::StepBack));
+            bFootworkActive = bSwayBack = true;
+            FootworkLegIndex = 0;
+            FootworkStartedAt = GetWorld()->GetTimeSeconds();
+            FootworkSpeedBefore = Boss->GetCharacterMovement()->MaxWalkSpeed;
+            AttackStreak = 0;
+            BowVelocity -= BowKick(SwayDuckPitch);
+            SetFlag(Boss, TEXT("bPostAttackProbePending"), false);
+            PostAttackDecisionUntil = 0;
+            SetNumber(Boss, TEXT("UtilityAction"), 0);
+            SetFlag(Boss, TEXT("bAttackIntentActive"), true);
+            Status = TEXT("맞고 있다: 숙이며 뒤로 빠진다");
+            SetText(Boss, TEXT("IntentPhase"), TEXT("footwork"));
+            SetText(Boss, TEXT("IntentReason"), Status);
+            SetText(Boss, TEXT("GoapReason"), Status);
+            Invoke(Boss, TEXT("RecordCombatQA"), TEXT("sway_back"));
+            BeginFootworkLeg();
+            return;
+        }
+    }
     const float Chance = Distance > PocketDistance ? PressChance
         : FootworkChance(AttackStreak, bCrowded, Flag(Boss, TEXT("bPhaseTwo")), PhaseTwoFootworkScale);
     if (FMath::FRand() >= Chance) return;
@@ -783,7 +886,7 @@ void UBossCombatIntentComponent::BeginFootworkLeg()
     LegRadius = FootworkLegs.Contains(static_cast<uint8>(EBossPositionAction::DirectApproach)) ? PressStopDistance
         : FMath::Max(FVector::Dist2D(Boss->GetActorLocation(), Player->GetActorLocation()), ComfortDistance);
     bLegFlipped = false;
-    Boss->GetCharacterMovement()->MaxWalkSpeed = FMath::Max(1.f, (Leg == EBossPositionAction::StepBack ? StepBackSpeed
+    Boss->GetCharacterMovement()->MaxWalkSpeed = FMath::Max(1.f, (bSwayBack ? SwaySpeed : Leg == EBossPositionAction::StepBack ? StepBackSpeed
         : (Leg == EBossPositionAction::DirectApproach && !bFacingStep ? PressSpeed : SideStepSpeed)) * (Flag(Boss, TEXT("bPhaseTwo")) ? PhaseTwoStepSpeedScale : 1.f));
     Invoke(Boss, TEXT("RecordCombatQA"), Leg == EBossPositionAction::StepBack ? TEXT("footwork_leg_back")
         : (Leg == EBossPositionAction::DirectApproach ? TEXT("footwork_leg_press") : TEXT("footwork_leg_circle")));
@@ -807,6 +910,8 @@ void UBossCombatIntentComponent::TickFootwork(float DeltaTime)
     // 플레이어가 멀리 빠져나갔으면 기동을 접고 다시 판단한다(그때는 달려가는 것이 먼저다).
     if (Now - FootworkStartedAt >= FootworkMaxDuration || (!bFacingStep && Distance > FootworkMaxDistance + 80.f) || !FootworkLegs.IsValidIndex(FootworkLegIndex))
     { EndFootwork(true, TEXT("기동 끝: 이 자리에서 새로 고른다")); return; }
+    if (bSwayBack && (Distance >= SwayDistance || Now - FootworkStartedAt >= .5))
+    { EndFootwork(true, TEXT("빠졌다: 이 자리에서 고른다")); return; }
     // 각 맞추는 걸음은 플레이어가 정면에 오면 끝난다(너무 짧아 발이 튀지 않게 0.35초는 딛는다).
     if (bFacingStep && Now - FootworkStartedAt >= .35
         && FMath::Abs(FMath::FindDeltaAngleDegrees(Boss->GetActorRotation().Yaw, ToPlayer.Rotation().Yaw)) <= FacingStepDoneAngle)
@@ -836,8 +941,8 @@ void UBossCombatIntentComponent::TickFootwork(float DeltaTime)
         LegSwept = 0.f;
         return;
     }
-    if (bBlocked || FootworkLegDone(Leg, Distance, LegSwept, LegSweepTarget, ComfortDistance, PressStopDistance,
-        static_cast<float>(Now - FootworkLegStartedAt)))
+    if (bBlocked || (!bSwayBack && FootworkLegDone(Leg, Distance, LegSwept, LegSweepTarget, ComfortDistance, PressStopDistance,
+        static_cast<float>(Now - FootworkLegStartedAt))))
     {
         if (!FootworkLegs.IsValidIndex(++FootworkLegIndex)) { EndFootwork(true, TEXT("기동 끝: 이 자리에서 새로 고른다")); return; }
         BeginFootworkLeg();
@@ -850,7 +955,7 @@ void UBossCombatIntentComponent::EndFootwork(bool bReturnToReady, const FString&
 {
     if (!bFootworkActive) return;
     bFootworkActive = false;
-    bFacingStep = false;
+    bFacingStep = bSwayBack = false;
     FootworkLegs.Reset();
     ACharacter* Boss = Cast<ACharacter>(GetOwner());
     if (!Boss) return;
@@ -985,27 +1090,62 @@ bool UBossCombatIntentComponent::RequestSlot(int32 SlotIndex)
     return Flag(Boss, TEXT("bActionStartAllowed"));
 }
 
-// 연계: 후딜이 시작될 때 이을지 한 번 정하고(확률), 후딜의 ChainStartFraction 지점에서 조건이 맞으면 후딜을 끊는다.
+bool UBossCombatIntentComponent::RequestLinkSlot(int32 SlotIndex, bool bPivot)
+{
+    // 돌아서며 치는 공격은 정면 조건을 건너뛴다(거리와 쿨다운은 계획이 이미 확인했다).
+    TGuardValue<bool> Scope(bRearResponseScope, bPivot);
+    return RequestSlot(SlotIndex);
+}
+
+namespace
+{
+// 이 공격의 제자리 패턴 / 달려드는 패턴 카드가 있는 자리. 없으면 INDEX_NONE.
+int32 FindPatternSlot(const AActor* Boss, int32 Id, bool bRunIn)
+{
+    const FArrayProperty* Cards = IsValid(Boss) ? FindFProperty<FArrayProperty>(Boss->GetClass(), TEXT("Actions")) : nullptr;
+    const FObjectPropertyBase* CardType = Cards ? CastField<FObjectPropertyBase>(Cards->Inner) : nullptr;
+    if (!CardType) return INDEX_NONE;
+    FScriptArrayHelper Values(Cards, Cards->ContainerPtrToValuePtr<void>(Boss));
+    for (int32 I = 0; I < Values.Num(); ++I)
+    {
+        const UObject* Card = CardType->GetObjectPropertyValue(Values.GetRawPtr(I));
+        if (static_cast<int32>(Number(Card, TEXT("ActionId"), -1)) == Id
+            && IsMidPattern(Id, static_cast<float>(Number(Card, TEXT("MinDistance")))) == bRunIn) return I;
+    }
+    return INDEX_NONE;
+}
+}
+
+// 이어 치기: 열린 후딜에 들어온 순간, 남은 공격의 순서를 지금 상황으로 한 번 짠다. 짜지면 후딜을 끊고 첫 걸음을 요청한다.
 void UBossCombatIntentComponent::UpdateChain(float Elapsed, float Remaining)
 {
     AActor* Boss = GetOwner();
-    if (ChainWantedId < 0 || ChainSlot != INDEX_NONE || Remaining <= 0.f) return;
-    if (Elapsed / (Elapsed + Remaining) < ChainStartFraction) return;
-    const int32 Wanted = ChainWantedId;
-    ChainWantedId = -1;                                  // 이 시점에 한 번만 판단한다
-    const int32 FollowSlot = FindSlotByActionId(Boss, Wanted);
-    const UObject* Card = CardAtSlot(Boss, FollowSlot);
+    if (!bLinkWanted || ChainSlot != INDEX_NONE || Remaining <= 0.f) return;
+    bLinkWanted = false;                                 // 이 시점에 한 번만 판단한다
     const AActor* Player = Cast<AActor>(Object(Boss, TEXT("ObservedPlayer")));
-    if (!Card || !IsValid(Player)) return;
+    if (!IsValid(Player) || Flag(Player, TEXT("bKnockedDown")) || Number(Player, TEXT("CurrentHealth"), 1) <= 0) return;
     const FVector Delta = Player->GetActorLocation() - Boss->GetActorLocation();
-    float Lo = 0.f, Hi = 0.f;
-    const float Gap = NearestStartBand(Wanted, Delta.Size2D(), static_cast<float>(Number(Card, TEXT("MinDistance"))),
-        static_cast<float>(Number(Card, TEXT("MaxDistance"))), Lo, Hi);
-    const bool bReady = Flag(Card, TEXT("bEnabled")) && GetWorld()->GetTimeSeconds() >= ArrayNumber(Boss, TEXT("CooldownUntil"), FollowSlot);
-    if (!ChainHolds(FVector::DotProduct(Boss->GetActorForwardVector(), Delta.GetSafeNormal2D()), Gap, bReady, Flag(Player, TEXT("bKnockedDown")))) return;
-    ChainSlot = FollowSlot;
+    const float Angle = FMath::Abs(FMath::FindDeltaAngleDegrees(Boss->GetActorRotation().Yaw, Delta.Rotation().Yaw));
+    // 다음 타가 닿을 때쯤의 거리로 짠다(약 0.6초 뒤).
+    const float Distance = PredictedDistance(Delta.Size2D(), PlayerSpeedAway(), .6f);
+    const double Now = GetWorld()->GetTimeSeconds();
+    const auto Available = [&](int32 Id, bool bRunIn)
+    {
+        const int32 CardSlot = FindPatternSlot(Boss, Id, bRunIn);
+        const UObject* Card = CardAtSlot(Boss, CardSlot);
+        return Card && Flag(Card, TEXT("bEnabled")) && IsValid(Object(Card, TEXT("Montage"))) && Now >= ArrayNumber(Boss, TEXT("CooldownUntil"), CardSlot);
+    };
+    const int32 Previous = StringUsed.Num() ? StringUsed.Last() : -1;
+    const TArray<FStringStep> Plan = PlanAttackString(Distance, Angle, StringHitsWanted - StringUsed.Num(), Previous, StringUsed, Available,
+        []() { return FMath::FRand(); });
+    if (Plan.IsEmpty()) return;
+    ChainSlot = FindPatternSlot(Boss, Plan[0].Id, Plan[0].bRunIn);
+    if (ChainSlot == INDEX_NONE) return;
+    bLinkPivot = !Plan[0].bRunIn && Angle > 40.f;
+    LinkAngle = Angle;
     UKismetSystemLibrary::K2_ClearTimer(Boss, TEXT("FinishCombatAction"));
-    SetText(Boss, TEXT("IntentReason"), TEXT("연계: 후딜을 끊고 다음 공격으로 잇는다"));
+    SetText(Boss, TEXT("IntentReason"), Plan.Num() >= 2 ? TEXT("이어 치기: 두 번 더 잇는다") : TEXT("이어 치기: 한 번 더 잇는다"));
+    SetText(Boss, TEXT("GoapReason"), FString::Printf(TEXT("이어 치기 계획: %d번 (%.0fcm, %.0f°)"), Plan.Num(), Distance, Angle));
     Invoke(Boss, TEXT("FinishCombatAction"));      // Ready가 되면 RecordAttackRecoveryEnd가 ChainSlot을 요청한다
 }
 
@@ -1515,6 +1655,23 @@ float BowKick(float PeakDegrees) { return PeakDegrees * 2.71828f * FMath::Sqrt(B
 const FName ActingSlot(TEXT("UpperBody"));      // 이 애니메이션 그래프의 하나뿐인 슬롯. 서 있을 때는 전신에 적용된다
 }
 
+// 준비 동작 동안의 제자리 회전을 제한한다. 전에는 발을 둔 채 몸만 플레이어를 따라 끝까지 돌아서, 미끄러지듯 도는 것으로 보였다.
+// 공격이 시작된 방향에서 WindupTurnLimit도까지만 따라가고, 넘으면 방향을 고정한다. 돌아서며 치는 공격(뒤쪽 대응, 이어 치기의 회전)은 제외한다.
+void UBossCombatIntentComponent::UpdateWindupTurn()
+{
+    AActor* Boss = GetOwner();
+    const bool bPreparing = StateIs(Boss, TEXT("Boss.Combat.Attack.Telegraph")) || StateIs(Boss, TEXT("Boss.Combat.Attack.Windup"));
+    if (!bPreparing || bRearResponseActive || WindupTurnLimit <= 0.f || (GetWorld() && GetWorld()->GetMapName().Contains(TEXT("Lvl_BossMotionLab"))))
+    { bWindupTracked = false; return; }
+    const float Yaw = Boss->GetActorRotation().Yaw;
+    if (!bWindupTracked) { bWindupTracked = true; WindupStartYaw = Yaw; return; }
+    if (FMath::Abs(FMath::FindDeltaAngleDegrees(WindupStartYaw, Yaw)) >= WindupTurnLimit && Flag(Boss, TEXT("bCanTurn")))
+    {
+        SetFlag(Boss, TEXT("bCanTurn"), false);
+        Invoke(Boss, TEXT("RecordCombatQA"), TEXT("windup_turn_locked"));
+    }
+}
+
 // 이번 공격이 닿았는지 본다: 공격하는 동안 플레이어의 체력이 줄었거나(맞음) 가드 압박이 올랐으면(막힘) 닿은 것이다.
 void UBossCombatIntentComponent::UpdateWhiff()
 {
@@ -1524,7 +1681,24 @@ void UBossCombatIntentComponent::UpdateWhiff()
     const bool bAttacking = StateIs(Boss, TEXT("Boss.Combat.Attack.Telegraph")) || StateIs(Boss, TEXT("Boss.Combat.Attack.Windup"))
         || StateIs(Boss, TEXT("Boss.Combat.Attack.Active")) || StateIs(Boss, TEXT("Boss.Combat.Attack.Link"));
     const double Health = Number(Player, TEXT("CurrentHealth")), Pressure = Number(Boss, TEXT("GuardPressure"));
-    if (bAttacking && !bWasAttacking) bAttackConnected = bAttackHit = false;
+    const double Dodges = Number(Boss, TEXT("RecentDodgeCount"));
+    if (bAttacking && !bWasAttacking)
+    {
+        bAttackConnected = bAttackHit = bDodgedThisAttack = false;
+        const int32 Id = static_cast<int32>(Number(Object(Boss, TEXT("ActiveAction")), TEXT("ActionId"), -1));
+        if (ChainDepth == 0)
+        {
+            // 새 몰아치기의 첫 공격: 이번에 몇 번 칠지 정한다.
+            StringUsed.Reset();
+            const bool bPhaseTwo = Flag(Boss, TEXT("bPhaseTwo"));
+            const bool bLab = GetWorld() && GetWorld()->GetMapName().Contains(TEXT("Lvl_BossMotionLab"));
+            StringHitsWanted = bLab ? 1 : ChooseStringLength(Id, FMath::FRand(), StringTwoShare,
+                (bPhaseTwo ? PhaseTwoStringThreeShare : StringThreeShare) + (Dodges >= 2.0 ? DodgeStringBonus : 0.f));
+        }
+        StringUsed.Add(Id);
+    }
+    if (Dodges > DodgeCountSeen + .5 && (bAttacking || StateIs(Boss, TEXT("Boss.Combat.Attack.Recovery")))) bDodgedThisAttack = true;
+    DodgeCountSeen = Dodges;
     if ((bAttacking || StateIs(Boss, TEXT("Boss.Combat.Attack.Recovery"))) && WhiffPlayerHealth >= 0.0)
     {
         if (Pressure > WhiffPressure + .01) bAttackConnected = true;                              // 막혔다
@@ -1862,13 +2036,10 @@ void UBossCombatIntentComponent::UpdateRecoveryTurn(float DeltaTime)
     {
         RecoveryStartedAt = Now;
         // 연계를 이을지는 후딜이 시작될 때 한 번 정한다. 연계로 나온 공격에서 또 잇지는 않는다.
-        const int32 FollowUp = ChainFollowUp(static_cast<int32>(Number(Object(Boss, TEXT("ActiveAction")), TEXT("ActionId"), -1)), FMath::FRand());
         const bool bLab = GetWorld()->GetMapName().Contains(TEXT("Lvl_BossMotionLab"));
         const bool bPhaseTwo = Flag(Boss, TEXT("bPhaseTwo"));
-        ChainWantedId = !bLab && FollowUp >= 0
-            && FMath::FRand() < ChainLinkChance(bPhaseTwo ? PhaseTwoChainChance : ChainChance, ChainDepth) ? FollowUp : -1;
+        bLinkWanted = !bLab && StringUsed.Num() < StringHitsWanted;
         bPursuitWanted = !bLab && FMath::FRand() < ChainLinkChance(bPhaseTwo ? PhaseTwoPursuitChance : PursuitChance, ChainDepth);
-        if (!bLab && ChainDepth >= 1) Invoke(Boss, TEXT("RecordCombatQA"), ChainWantedId >= 0 || bPursuitWanted ? TEXT("string_link") : TEXT("string_end"));
         // 헛침: 닿지 않았으면 상체가 앞으로 쏠렸다 돌아오고 몸이 조금 딸려 나간다. 맞혔을 때의 후딜과 달라 보인다.
         const AActor* Dodger = UGameplayStatics::GetPlayerPawn(this, 0);
         bWhiffed = !bLab && !bAttackConnected && IsValid(Dodger) && Number(Dodger, TEXT("CurrentHealth"), 1) > 0 && !Flag(Dodger, TEXT("bKnockedDown"));
@@ -1876,11 +2047,14 @@ void UBossCombatIntentComponent::UpdateRecoveryTurn(float DeltaTime)
         {
             // 결과의 기억: 이 자리(슬롯)의 공격이 이번에 어떻게 됐는지 적어 둔다.
             FAttackOutcome& Outcome = OutcomeBySlot.FindOrAdd(static_cast<int32>(Number(Boss, TEXT("SelectedSlot"), -1)));
-            Outcome.Whiffs = bWhiffed ? Outcome.Whiffs + 1 : 0;
+            // 회피로 피한 것은 그 공격의 잘못이 아니다(플레이어가 잘한 것). 회피 없이 빗나간 것만 "안 통했다"로 센다.
+            if (bWhiffed && bDodgedThisAttack) { /* 기록을 바꾸지 않는다 */ }
+            else Outcome.Whiffs = bWhiffed ? Outcome.Whiffs + 1 : 0;
             Outcome.bHit = bAttackHit;
             Outcome.At = Now;
         }
         bRecoveryOpen = false;
+        bStringEndLogged = false;
         if (bWhiffed)
         {
             BowVelocity -= BowKick(WhiffBowPitch);
@@ -1920,7 +2094,8 @@ void UBossCombatIntentComponent::UpdateRecoveryTurn(float DeltaTime)
     if (bPursuitWanted && RecoveryMayTurn(Elapsed, Remaining, ChainStartFraction))
     {
         bPursuitWanted = false;
-        if (PursuitHolds(ToPlayer.Size2D(), FVector::DotProduct(Boss->GetActorForwardVector(), ToPlayer.GetSafeNormal2D()),
+        // 맞힌 뒤에는 쫓지 않는다: 맞고 밀려난 것은 달아난 것이 아니다(1.5초에 두 대를 연달아 맞는 일이 있었다).
+        if (bWhiffed && PursuitHolds(ToPlayer.Size2D(), FVector::DotProduct(Boss->GetActorForwardVector(), ToPlayer.GetSafeNormal2D()),
             Flag(Player, TEXT("bKnockedDown")), PursuitDistance))
         {
             bPursuitExit = true;
@@ -1933,7 +2108,10 @@ void UBossCombatIntentComponent::UpdateRecoveryTurn(float DeltaTime)
     }
     // 옆·뒤를 잡혔으면 후딜을 끝까지 서 있지 않는다. 앞쪽(FlankExitFraction)은 반격 시간으로 지키고, 그 뒤에는
     // 후딜을 일찍 끝내서 제대로 된 턴 동작이나 뒤쪽 대응으로 넘어간다. 발을 둔 채 몸만 돌리는 일은 하지 않는다.
-    if (!bFlankExitDone && RecoveryMayTurn(Elapsed, Remaining, FlankExitFraction)
+    // 몰아치기의 마지막 공격은 옆·뒤를 잡혀도 후딜을 끝까지 보낸다. 보스를 지나쳐 피한 플레이어가 보상을 잃지 않게 한다.
+    const bool bEnder = ChainDepth >= 1 && ChainSlot == INDEX_NONE;
+    if (bEnder && !bStringEndLogged) { bStringEndLogged = true; Invoke(Boss, TEXT("RecordCombatQA"), TEXT("string_end")); }
+    if (!bFlankExitDone && !bEnder && RecoveryMayTurn(Elapsed, Remaining, FlankExitFraction)
         && FMath::Abs(FMath::FindDeltaAngleDegrees(Boss->GetActorRotation().Yaw, Wanted.Yaw)) >= FlankExitAngle)
     {
         bFlankExitDone = true;
@@ -1954,6 +2132,7 @@ void UBossCombatIntentComponent::TickComponent(float DeltaTime, ELevelTick TickT
     UpdateComboStages();
     UpdateTravelScale();
     UpdateWhiff();
+    UpdateWindupTurn();
     UpdateRecoveryTurn(DeltaTime);
     UpdateRearResponse(DeltaTime);
     UpdateSprint();
@@ -2669,11 +2848,36 @@ bool FBossVarietyTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Main punches are not pressure answers"), PressureBoost(0, 5, 200.f), 1.f);
     TestEqual(TEXT("Combo without dodges: a small share"), ComboShare(0), .3f);
     TestEqual(TEXT("Combo after three dodges: full"), ComboShare(3), 1.f);
-    TestEqual(TEXT("Left leads into the uppercut"), ChainFollowUp(0), 2);
-    TestEqual(TEXT("Right leads into the overhead"), ChainFollowUp(1), OverheadId);
-    TestEqual(TEXT("Two-hit leads into the sweep"), ChainFollowUp(9), 3);
-    TestEqual(TEXT("Left sometimes leads into the right"), ChainFollowUp(0, .8f), 1);
-    TestEqual(TEXT("Right sometimes leads back into the left"), ChainFollowUp(1, .8f), 0);
+    {
+        const auto All = [](int32, bool) { return true; };
+        const auto Flat = []() { return 0.f; };
+        TArray<FStringStep> Plan = PlanAttackString(250.f, 0.f, 2, 0, {0}, All, Flat);
+        TestEqual(TEXT("Left, two more: a flowing hit, then a finisher"), Plan.Num(), 2);
+        TestTrue(TEXT("... right hand next, then a big hit to end"), Plan.Num() == 2 && Plan[0].Id == 1 && IsFinisher(Plan[1].Id));
+        Plan = PlanAttackString(250.f, 0.f, 1, 0, {0}, All, Flat);
+        TestTrue(TEXT("Left, one more: the uppercut ends it"), Plan.Num() == 1 && Plan[0].Id == 2);
+        Plan = PlanAttackString(250.f, 0.f, 1, 1, {1}, All, Flat);
+        TestTrue(TEXT("Right, one more: the overhead with the same hand"), Plan.Num() == 1 && Plan[0].Id == OverheadId);
+        Plan = PlanAttackString(480.f, 0.f, 2, 0, {0}, All, Flat);
+        TestTrue(TEXT("Player backed off: run in with the other hand, then finish in place"),
+            Plan.Num() == 2 && Plan[0].bRunIn && Plan[0].Id == 1 && !Plan[1].bRunIn && IsFinisher(Plan[1].Id));
+        Plan = PlanAttackString(250.f, 90.f, 1, 0, {0}, All, Flat);
+        TestTrue(TEXT("Player at the side: only a planted hit can pivot to them"), Plan.Num() == 1 && !Plan[0].bRunIn);
+        Plan = PlanAttackString(480.f, 90.f, 2, 0, {0}, All, Flat);
+        TestEqual(TEXT("Far and at the side: nothing links"), Plan.Num(), 0);
+        Plan = PlanAttackString(700.f, 0.f, 2, 0, {0}, All, Flat);
+        TestEqual(TEXT("Out of every reach: nothing links"), Plan.Num(), 0);
+        Plan = PlanAttackString(250.f, 0.f, 2, 0, {0}, [](int32 Id, bool) { return Id == 3; }, Flat);
+        TestTrue(TEXT("Only the sweep is off cooldown: a shorter string"), Plan.Num() == 1 && Plan[0].Id == 3);
+        Plan = PlanAttackString(250.f, 0.f, 1, 9, {9}, All, Flat);
+        TestTrue(TEXT("Two-hit ends in the sweep"), Plan.Num() == 1 && Plan[0].Id == 3);
+    }
+    TestEqual(TEXT("Jab-jab-hook is already a string"), ChooseStringLength(4, 0.f, .4f, .25f), 1);
+    TestEqual(TEXT("A big hit stands alone"), ChooseStringLength(2, 0.f, .4f, .25f), 1);
+    TestEqual(TEXT("Left can open three"), ChooseStringLength(0, .1f, .4f, .25f), 3);
+    TestEqual(TEXT("Left can open two"), ChooseStringLength(0, .5f, .4f, .25f), 2);
+    TestEqual(TEXT("Left can stay single"), ChooseStringLength(0, .9f, .4f, .25f), 1);
+    TestEqual(TEXT("Two-hit takes at most one more"), ChooseStringLength(9, .1f, .4f, .25f), 2);
     TestEqual(TEXT("First link uses the full chance"), ChainLinkChance(.5f, 0), .5f);
     TestEqual(TEXT("A chained attack links again half as often"), ChainLinkChance(.5f, 1), .25f);
     TestEqual(TEXT("Three in a row is the limit"), ChainLinkChance(.5f, 2), 0.f);
@@ -2687,11 +2891,6 @@ bool FBossVarietyTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("Big angle: the turn animation"), FacingStepWanted(110.f, 32.f, 70.f));
     TestFalse(TEXT("Nearly facing: nothing to do"), FacingStepWanted(10.f, 32.f, 70.f));
     TestTrue(TEXT("Bow peaks near the asked angle"), FMath::IsNearlyEqual(BowKick(10.f) / (2.71828f * FMath::Sqrt(BowStiffness)), 10.f, .01f));
-    TestEqual(TEXT("Heavy finishers lead nowhere"), ChainFollowUp(3) + ChainFollowUp(2) + ChainFollowUp(OverheadId), -3);
-    TestTrue(TEXT("Chain holds when the follow-up reaches from here"), ChainHolds(.9f, 0.f, true, false));
-    TestFalse(TEXT("No walking into a chain"), ChainHolds(.9f, 30.f, true, false));
-    TestFalse(TEXT("No chain on a downed player"), ChainHolds(.9f, 0.f, true, true));
-    TestFalse(TEXT("No chain when the player got behind"), ChainHolds(0.f, 0.f, true, false));
     TestTrue(TEXT("Backing off at a walk counts as retreating"), IsRetreating(300.f));
     TestFalse(TEXT("Standing is not retreating"), IsRetreating(20.f));
     TestEqual(TEXT("Overhead in range"), NearestStartBand(OverheadId, 250.f, 165.f, 285.f, Lo, Hi), 0.f);

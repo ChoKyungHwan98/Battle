@@ -238,13 +238,13 @@ def poke():
     return 1
 
 
-def acting_scenario(distance=1200, seconds=60):
+def acting_scenario(distance=1200, seconds=60, every=1.5):
     """Far start (taunt, then sprint), then a close fight with the boss being hit now and then."""
     m = "__import__('TestBossSprint')"
     steps = [{'action': 'start_pie'}, {'action': 'wait_for_pie', 'timeout_seconds': 30}, {'action': 'wait', 'seconds': 8.},
              {'action': 'python_assert_number', 'expression': f'{m}.begin({distance})', 'operator': 'eq', 'expected': 1}]
-    for _ in range(int(seconds // 1.5)):
-        steps += [{'action': 'wait', 'seconds': 1.5}, {'action': 'python_assert_number', 'expression': f'{m}.poke()', 'operator': 'eq', 'expected': 1}]
+    for _ in range(int(seconds // every)):
+        steps += [{'action': 'wait', 'seconds': every}, {'action': 'python_assert_number', 'expression': f'{m}.poke()', 'operator': 'eq', 'expected': 1}]
     steps += [{'action': 'python_assert_number', 'expression': f'{m}.finish()', 'operator': 'eq', 'expected': 1}]
     return {'name': 'Boss acting', 'dependencies': ['Tools/TestBossSprint.py', 'Tools/TestDonorPunch.py'],
             'steps': steps, 'teardown': {'stop_pie': True}}

@@ -70,13 +70,13 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float FootworkMaxDistance = 460.f;
     /** 기동 전체(여러 걸음)의 최대 시간. 넘으면 그 자리에서 끝내고 공격을 고른다. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float FootworkMaxDuration = 2.2f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float StepBackSpeed = 210.f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float SideStepSpeed = 260.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float StepBackSpeed = 330.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float SideStepSpeed = 340.f;
     /** 주먹 거리: 이보다 멀면 "걸어 들어가 조이기"를 할 수 있다. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float PocketDistance = 300.f;
     /** 걸어 들어갈 때 멈추는 간격과 속도. 달리지 않고 성큼성큼 걷는다. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float PressStopDistance = 240.f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float PressSpeed = 200.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float PressSpeed = 330.f;
     /** 주먹 거리 밖에 있는 플레이어에게 걸어 들어갈 확률. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float PressChance = .3f;
 
@@ -109,8 +109,12 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float PhaseTwoTauntCooldownScale = .6f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float PhaseTwoStepSpeedScale = 1.15f;
     /** 연계: 공격 뒤에 후딜을 끊고 정해진 다음 공격으로 잇는 확률(1페이즈 / 2페이즈)과, 후딜의 어느 지점에서 잇는지. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float ChainChance = .5f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float PhaseTwoChainChance = .7f;
+    /** 이어 치기: 왼손·오른손으로 시작했을 때 두 번 / 세 번까지 이을 몫(나머지는 한 번만 친다). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float StringTwoShare = .4f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float StringThreeShare = .25f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float PhaseTwoStringThreeShare = .4f;
+    /** 플레이어가 최근 회피를 두 번 넘게 했으면 세 번까지 이을 몫에 더한다(한 번 피하고 들어오는 것을 잡는다). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float DodgeStringBonus = .15f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float ChainStartFraction = .35f;
     /** 추격: 후딜의 연계 지점에서 플레이어가 이보다 멀리(반격할 수 없는 거리) 앞에 있으면 후딜을 끊고 바로 다음 행동을 고른다. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float PursuitDistance = 360.f;
@@ -128,8 +132,16 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float BreathRate = .9f;
     /** 각 맞추는 걸음: 공격 뒤 플레이어가 이 각도 범위로 비껴 있으면 제자리 턴 대신 걸으면서 돌아본다. 그보다 크면 턴 동작을 쓴다. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float FacingStepMinAngle = 32.f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float FacingStepMaxAngle = 70.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float FacingStepMaxAngle = 110.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float FacingStepDoneAngle = 12.f;
+    /** 숙이며 빠지기: 붙어서 맞고 있으면(2초에 SwayHits번 이상) 상체를 숙이며 뒤로 빠르게 빠진다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float SwayChance = .6f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") int32 SwayHits = 2;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float SwaySpeed = 520.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float SwayDistance = 330.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float SwayDuckPitch = 14.f;
+    /** 공격을 준비하는 동안 제자리에서 플레이어 쪽으로 돌 수 있는 각도. 넘으면 방향이 고정된다(옆으로 피하면 빗나간다). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Turn") float WindupTurnLimit = 25.f;
     // ---- 플레이어의 가드 ----
     /** 저스트 가드: 맞기 직전 이 시간 안에 올린 가드는 피해를 받지 않는다(보통 가드는 20%를 받는다). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Guard Reward") float JustGuardWindow = .25f;
@@ -177,7 +189,15 @@ private:
     void UpdateChain(float Elapsed, float Remaining);
     bool RequestSlot(int32 SlotIndex);
     void AddExtraCards();
-    int32 ChainWantedId = -1;        // 이번 후딜에서 이으려는 공격(없으면 -1)
+    bool bLinkWanted = false;        // 이번 후딜에서 다음 타로 이으려 하는가(열린 후딜에서 한 번 계획한다)
+    bool bStringEndLogged = false;
+    bool bLinkPivot = false;         // 이을 공격이 돌아서며 치는 것인가(정면 조건을 건너뛰고 준비 동작 동안 돈다)
+    float LinkAngle = 0.f;
+    int32 StringHitsWanted = 1;      // 이번 몰아치기에서 치려는 공격 수(Utility가 정한다)
+    TArray<int32> StringUsed;        // 이번 몰아치기에서 이미 친 공격(ActionId)
+    bool bDodgedThisAttack = false;  // 이번 공격 동안 플레이어가 회피했는가
+    double DodgeCountSeen = 0.0;
+    bool RequestLinkSlot(int32 SlotIndex, bool bPivot);
     int32 ChainSlot = INDEX_NONE;    // 후딜을 끊었고, Ready가 되면 바로 요청할 자리
     bool bChainedAttack = false;     // 지금 공격이 연계로 나온 것인가
     int32 ChainDepth = 0;            // 지금 공격이 몰아치기(연계·추격)의 몇 번째인가(0 = 첫 공격). 세 번까지만 잇는다
@@ -186,6 +206,10 @@ private:
     void UpdateWhiff();
     bool TryFacingStep();
     bool bFacingStep = false;        // 지금 기동이 "각 맞추는 걸음"인가
+    bool bSwayBack = false;          // 지금 기동이 "숙이며 빠지기"인가
+    void UpdateWindupTurn();
+    float WindupStartYaw = 0.f;
+    bool bWindupTracked = false;
     bool bWasAttacking = false;
     bool bAttackConnected = false;   // 이번 공격이 닿았는가(맞혔거나 막혔다)
     bool bWhiffed = false;           // 이번 후딜은 헛친 뒤의 후딜인가
