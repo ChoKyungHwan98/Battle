@@ -88,6 +88,9 @@ private:
     void ResetFixture();
     void SetDistance(int32 Index);
     void RequestAction(int32 Index);
+    /** K: 훅 단독 시험. 1번(왼손) 자리로 요청하고 카드만 훅 카드로 바꾼다. */
+    void RequestHook();
+    bool bHookRequest = false;
     void PreviousClip();
     void NextClip();
     void ToggleCatalog();

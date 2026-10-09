@@ -30,7 +30,10 @@ namespace
 constexpr TCHAR ClipRoot[] = TEXT("/Game/ParagonCrunch/Characters/Heroes/Crunch/Animations/");
 constexpr float Distances[] = { 175.f, 300.f, 350.f, 400.f, 500.f, 1000.f };
 const TCHAR* const PunchModes[] = { TEXT("실전 자동"), TEXT("기본 제자리 · 몸 전진 없음"),
-    TEXT("기존 전진 · 최대 145cm"), TEXT("오른발 디딤 → 왼손 · 1키 전용") };
+    TEXT("기존 전진 · 최대 145cm"), TEXT("디딤 공격 · 1 왼손 / 2 오른손 / 3 어퍼컷 / 5 잽잽훅") };
+// 기존 전진(발은 안 나가고 몸만 밀려가는 방식)은 L 순환에서 뺐다. 번호는 3번(오른발 디딤)과
+// 요청 경로가 쓰고 있어 그대로 두고 건너뛰기만 한다.
+constexpr int32 RetiredPunchMode = 2;
 const TCHAR* const FocusNames[] = {
     TEXT("Ability_Combo_01"), TEXT("Ability_Combo_01_Slow"), TEXT("Ability_Combo_01_Recovery"),
     TEXT("Ability_Combo_02"), TEXT("Ability_Combo_02_Slow"), TEXT("Ability_Combo_02_Recovery"),
@@ -146,8 +149,8 @@ TSharedRef<SWidget> UBossMotionLabOverlay::RebuildWidget()
     ControlsText->SetColorAndOpacity(FSlateColor(FLinearColor(0.78f, 0.88f, 0.91f, 1.f)));
     ControlsText->SetText(FText::FromString(
         TEXT("\nJ 사거리 측정 / 실전 조건 검사 전환\n")
-        TEXT("\n주먹 비교  L 전진 방식 변경 → 1 왼손 / 2 오른손\n")
-        TEXT("새 모션: 오른발 디딤 → 왼손 (L로 선택, 1키)\n")
+        TEXT("\n주먹 비교  L 방식 변경 → 1 왼손 / 2 오른손\n")
+        TEXT("디딤 공격: L로 선택 → 1 왼손 / 2 오른손 / 3 어퍼컷 / 5 잽잽훅 · K 훅 단독\n")
         TEXT("실전 행동  3 어퍼컷\n")
         TEXT("               4 휩쓸기 · 5 연계 · 6 가드 크래시\n")
         TEXT("               7 슈퍼맨 · 8 접근 · 9 점프\n")
@@ -215,6 +218,7 @@ void ABossMotionLabDirector::BindInput()
     Key(EKeys::H, &ABossMotionLabDirector::ToggleHitboxes);
     Key(EKeys::Tab, &ABossMotionLabDirector::ToggleControls);
     Key(EKeys::L, &ABossMotionLabDirector::TogglePunchMode);
+    Key(EKeys::K, &ABossMotionLabDirector::RequestHook);
     Key(EKeys::J, &ABossMotionLabDirector::ToggleRangeMeasurement);
     for (const FKey K : {EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five,
         EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine, EKeys::Zero})
@@ -398,6 +402,7 @@ void ABossMotionLabDirector::TogglePunchMode()
         return;
     }
     PunchMode = (PunchMode + 1) % UE_ARRAY_COUNT(PunchModes);
+    if (PunchMode == RetiredPunchMode) PunchMode = (PunchMode + 1) % UE_ARRAY_COUNT(PunchModes);
     ResetFixture();
     LastResult = FString::Printf(TEXT("비교 방식: %s · 1 왼손 / 2 오른손"),PunchModes[PunchMode]);
 }
@@ -412,6 +417,12 @@ void ABossMotionLabDirector::ToggleRangeMeasurement()
     bRangeMeasurement = !bRangeMeasurement;
     LastResult = bRangeMeasurement ? TEXT("사거리 측정 ON · 거리·방향·쿨다운 제한 없이 실제 접촉 시험")
         : TEXT("실전 조건 검사 · 거리·방향·쿨다운 적용");
+}
+
+void ABossMotionLabDirector::RequestHook()
+{
+    TGuardValue<bool> Scope(bHookRequest, true);
+    RequestAction(0);
 }
 
 void ABossMotionLabDirector::RequestAction(int32 Index)
@@ -429,7 +440,9 @@ void ABossMotionLabDirector::RequestAction(int32 Index)
     DamageEventCount = 0;
     DamageTotal = 0.f;
     ManualActionIndex = Index;
-    ManualPunchMode = Index == 0 || (Index == 1 && PunchMode != 3) ? PunchMode : 0;
+    // 1·2번은 선택한 방식을 그대로 쓰고, 5번(잽잽훅)은 디딤 방식(3)일 때만 쓴다.
+    ManualPunchMode = Index == 0 || Index == 1 ? PunchMode : ((Index == 2 || Index == 4) && PunchMode == 3 ? 3 : 0);
+    if (bHookRequest) ManualPunchMode = 4;      // 훅 단독 카드 (BossCombatIntentComponent의 LabStepCardPath)
     ManualActionStartLocation = BossActor->GetActorLocation();
     ManualActionStartDistance = FVector::Dist2D(ManualActionStartLocation, PlayerActor->GetActorLocation());
     FirstHandContactAt = FirstWindowOpenAt = LastHandContactAt = ClosestHandGapAt = LastContactSampleAt = -1.f;
@@ -645,7 +658,7 @@ void ABossMotionLabDirector::DrawOverlay() const
     const bool bPunch = ManualActionIndex == 0 || ManualActionIndex == 1;
     const FString ContactLine = bPunch
         ? FString::Printf(TEXT("본 테스트: %s\n몸 전진 %.0f cm · %s %.0f cm\n손 접촉 %s · 판정 시작 %s\n"),
-            PunchModes[ManualPunchMode],IsValid(BossActor) ? FVector::Dist2D(BossActor->GetActorLocation(),ManualActionStartLocation) : 0.f,
+            (ManualPunchMode == 4 ? TEXT("훅 단독 (K키)") : PunchModes[ManualPunchMode]),IsValid(BossActor) ? FVector::Dist2D(BossActor->GetActorLocation(),ManualActionStartLocation) : 0.f,
             ManualPunchMode == 3 ? TEXT("추가 수동 전진") : TEXT("요청"),
             ReadNumber(BossActor,TEXT("AttackStepDistance")),*Contact,*Window)
         : TEXT("");

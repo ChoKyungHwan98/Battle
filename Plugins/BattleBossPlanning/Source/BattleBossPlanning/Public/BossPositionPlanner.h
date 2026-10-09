@@ -9,7 +9,8 @@ enum class EBossPositionGoal : uint8
 {
     PrepareStrike,
     PrepareGuardBreak,
-    ProbeThenStrike
+    ProbeThenStrike,
+    Footwork
 };
 
 UENUM(BlueprintType)
@@ -62,6 +63,14 @@ public:
     static FBossPositionPlan PlanAttackEntry(
         float Distance, float FacingDot, float StartMin, float StartMax, float MinimumFacingDot,
         bool bForwardOpen, bool bBackOpen, bool bLeftEntryOpen, bool bRightEntryOpen, float MoveSpeed);
+
+    /** 공격 뒤 기동(발놀림). 고른 공격 없이 자리만 목표로 한다. 사실은 네 가지:
+     * 간격이 있다 / 정면이다 / 각을 바꿨다 / 주먹 거리 안이다. */
+    static FBossPositionPlan PlanFootwork(
+        float Distance, float FacingDot, float CrowdDistance, float PocketDistance, float MinimumFacingDot,
+        bool bBackOpen, bool bLeftOpen, bool bRightOpen, bool bForwardOpen,
+        bool bWantSpace, bool bWantAngle, bool bWantPocket,
+        float BackCost, float LeftCost, float RightCost, float PressCost);
 
     /** The caller supplies the selected attack's goal; this never selects another attack. */
     UFUNCTION(BlueprintPure, Category = "Boss|GOAP")

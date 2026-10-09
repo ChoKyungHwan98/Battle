@@ -52,7 +52,8 @@ def sample(_):
     cap=p.get_component_by_class(unreal.CapsuleComponent)
     SAMPLES.append({'t':unreal.GameplayStatics.get_time_seconds(w)-START_TIME,
         'boss':b.get_actor_location().to_tuple(),'player':p.get_actor_location().to_tuple(),
-        'hand':mesh.get_socket_location('hand_l').to_tuple(),'foot_l':mesh.get_socket_location('foot_l').to_tuple(),
+        'hand':mesh.get_socket_location('hand_l').to_tuple(),'hand_r':mesh.get_socket_location('hand_r').to_tuple(),
+        'yaw':b.get_actor_rotation().yaw,'mesh_yaw':mesh.get_editor_property('relative_rotation').yaw,'foot_l':mesh.get_socket_location('foot_l').to_tuple(),
         'foot_r':mesh.get_socket_location('foot_r').to_tuple(),'hp':p.get_editor_property('CurrentHealth'),
         'state':b.get_editor_property('BossState').export_text(),'open':bool(b.get_editor_property('bPhysicalStrikeOpen')),
         'hit':bool(b.get_editor_property('bPhysicalStrikeHit')),'montage':m.get_name() if m else '',

@@ -18,22 +18,124 @@ public:
     void RecordAttackRecoveryEnd();
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
-    bool IsActive() const { return bActive || bReassessing; }
+    bool IsActive() const { return bActive || bReassessing || bFootworkActive || bPerforming; }
     float FailureMultiplier(int32 Slot) const;
+    /** 결과의 기억: 이 자리의 공격이 최근에 헛쳤으면 1보다 작고, 맞혔으면 1보다 크다. */
+    float OutcomeMultiplier(int32 Slot) const;
+    /** 플레이어가 보스에게서 멀어지는 속도(cm/초). 다가오면 음수. */
+    float PlayerSpeedAway() const;
+    /** 화면 표시용: 지금 후딜이 닫혀 있는지 열려 있는지와 그 공격의 결과. 후딜이 아니면 빈 문자열. */
+    FString RecoveryLabel() const;
+    /** 최근 Seconds초 동안 맞은 횟수. */
+    int32 HitsTakenWithin(float Seconds) const;
+    /** 전투에서 처음 판단한 시각. 한 번도 안 쓴 공격의 "안 쓴 시간"을 여기서부터 잰다. */
+    double FirstDecisionAt = -1.0;
     /** Lab override: 0=combat, 1=no travel, 2=manual step, 3=right-foot root-motion left punch. */
     int32 MotionLabPunchMode = 0;
     /** Runtime-only fixture permissions. Start override exists only inside a manual lab request. */
     bool bLabStartRequestScope = false;
     bool bLabRangeMeasurementAction = false;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float RunSpeed = 600.f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float MaxDuration = 2.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float RunSpeed = 760.f;
+    /** 달려오기(접근)의 최고 속도. 블루프린트의 ApproachRunSpeed(예전 440)를 이 값으로 덮어쓴다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Sprint") float ApproachSprintSpeed = 760.f;
+    /** 이 속도를 넘으면 Sprint 동작으로 바꾸고, 아래로 내려가면 Jog로 돌아간다(둘 사이는 유지). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Sprint") float SprintOnSpeed = 520.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Sprint") float SprintOffSpeed = 430.f;
+    /** Sprint_Fwd가 발이 미끄러지지 않는 속도(배율 1 기준, 발의 접지 구간에서 잰 값). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Sprint") float SprintNaturalSpeed = 686.f;
+    /** 제자리 턴 동작이 도는 속도(도/초). 턴 동작의 재생 속도와 몸의 회전을 이 값에 함께 맞춘다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Turn") float TurnMontageSpeed = 130.f;
+    /** 후딜의 길이에 곱하는 값. 1이면 카드에 적힌 그대로, 0.7이면 30% 짧다. 동작도 같은 비율로 빨리 끝난다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Recovery") float RecoveryScale = .7f;
+    /** 후딜이 이만큼 지났을 때 플레이어가 FlankExitAngle 넘게 옆·뒤에 있으면 후딜을 일찍 끝낸다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Recovery") float FlankExitFraction = .6f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Recovery") float FlankExitAngle = 60.f;
+    /** 고른 공격의 자리를 잡는 데 쓰는 최대 시간. 넘으면 포기하고 다시 고른다. 길면 물러나는 플레이어를 쫓느라 공격이 끊긴다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float MaxDuration = 1.2f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float ReplanInterval = .2f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float TurnSpeed = 160.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float FailureWindow = 6.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float ReassessDuration = .65f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float SideEntryAngle = 20.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float SideEntrySpeed = 220.f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float PostAttackProbeChance = .25f;
+    /** 공격을 고른 뒤 치기 전에 옆으로 한 번 도는 확률. 공격 뒤 발놀림(Footwork)이 같은 일을 하므로 0으로 둔다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Intent") float PostAttackProbeChance = 0.f;
+    /** 공격 뒤 발놀림: 이보다 가까우면 "붙었다"고 본다(몸이 닿는 거리는 약 172cm). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float CrowdDistance = 200.f;
+    /** 발놀림이 끝났을 때 두려는 간격. 단거리 공격이 전부 닿는 거리다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float ComfortDistance = 260.f;
+    /** 옆으로 돌 때 플레이어를 중심으로 도는 각도. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float FootworkAngle = 30.f;
+    /** 이보다 멀면 발놀림을 하지 않는다(그때는 다가가는 것이 먼저다). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float FootworkMaxDistance = 460.f;
+    /** 기동 전체(여러 걸음)의 최대 시간. 넘으면 그 자리에서 끝내고 공격을 고른다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float FootworkMaxDuration = 2.2f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float StepBackSpeed = 210.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float SideStepSpeed = 260.f;
+    /** 주먹 거리: 이보다 멀면 "걸어 들어가 조이기"를 할 수 있다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float PocketDistance = 300.f;
+    /** 걸어 들어갈 때 멈추는 간격과 속도. 달리지 않고 성큼성큼 걷는다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float PressStopDistance = 240.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float PressSpeed = 200.f;
+    /** 주먹 거리 밖에 있는 플레이어에게 걸어 들어갈 확률. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float PressChance = .3f;
+
+    /** 2페이즈는 덜 쉬고 더 몰아친다: 발놀림 확률에 곱한다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float PhaseTwoFootworkScale = .7f;
+    /** 후딜의 이 비율이 지나면 느리게 돌 수 있다. 그 전에는 전혀 돌지 않는다(반격 시간). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Recovery") float RecoveryTurnStart = .5f;
+    /** 후딜 뒤쪽에 발을 둔 채 도는 속도(도/초). 0이면 쓰지 않는다: 발이 미끄러져 보여서 끄고, 후딜을 일찍 끝내는 방식으로 바꿨다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Recovery") float RecoveryTurnSpeed = 0.f;
+    /** 뒤쪽 대응: 공격이 끝났을 때 플레이어가 등 뒤에 있으면, 뒤돌아보는 대신 돌면서 치는 확률. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Rear") float RearResponseChance = .6f;
+    /** 뒤쪽 대응 뒤 다시 쓸 수 있을 때까지의 시간(초). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Rear") float RearResponseCooldown = 6.f;
+    /** 뒤쪽 대응의 준비 동작 동안 플레이어 쪽으로 도는 속도(도/초). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Rear") float RearResponseTurnSpeed = 300.f;
+    // ---- 연기: 판단에는 영향을 주지 않고, 보스가 살아 있는 상대로 보이게 하는 것들 ----
+    /** 시선: 공격하지 않을 때 상체와 머리가 플레이어를 따라가는 최대 각도와 따라가는 빠르기. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float LookMaxYaw = 70.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float LookSpeed = 5.f;
+    /** 후딜의 이 비율이 지나면 시선이 플레이어를 따라가기 시작한다(발과 몸통의 방향은 그대로). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float RecoveryLookStart = .25f;
+    /** 움찔: 맞았을 때 몸이 밀렸다 돌아오는 세기(cm/초). 공격은 끊기지 않는다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float FlinchImpulse = 420.f;
+    /** 도발: 플레이어가 이보다 멀리 달아나면 달려가기 전에 한 번 도발한다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float TauntDistance = 800.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float TauntCooldown = 25.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float TauntMaxSeconds = 2.2f;
+    /** 2페이즈: 덜 움찔하고, 더 자주 도발하고, 걸음이 빨라진다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float PhaseTwoFlinchScale = .55f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float PhaseTwoTauntCooldownScale = .6f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float PhaseTwoStepSpeedScale = 1.15f;
+    /** 연계: 공격 뒤에 후딜을 끊고 정해진 다음 공격으로 잇는 확률(1페이즈 / 2페이즈)과, 후딜의 어느 지점에서 잇는지. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float ChainChance = .5f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float PhaseTwoChainChance = .7f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float ChainStartFraction = .35f;
+    /** 추격: 후딜의 연계 지점에서 플레이어가 이보다 멀리(반격할 수 없는 거리) 앞에 있으면 후딜을 끊고 바로 다음 행동을 고른다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float PursuitDistance = 360.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float PursuitChance = .75f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float PhaseTwoPursuitChance = 1.f;
+    /** 몰아치기의 끝: 연계나 추격으로 이어진 공격은 후딜을 줄이지 않는다(1 = 카드에 적힌 그대로). 몰아친 뒤에는 반드시 큰 틈이 온다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float EnderRecoveryScale = 1.f;
+    /** 헛침: 공격이 닿지 않았으면 후딜이 시작될 때 상체가 앞으로 쏠렸다 돌아오고(도), 몸이 조금 딸려 나간다(cm/초). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float WhiffBowPitch = 10.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float WhiffLurch = 200.f;
+    /** 헛친 뒤에는 시선이 이 배수로 빨리 플레이어를 찾는다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float WhiffLookSpeedScale = 2.2f;
+    /** 숨 고르기: 후딜 동안 상체가 오르내리는 폭(도)과 빠르기(초당 횟수). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float BreathPitch = 2.5f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float BreathRate = .9f;
+    /** 각 맞추는 걸음: 공격 뒤 플레이어가 이 각도 범위로 비껴 있으면 제자리 턴 대신 걸으면서 돌아본다. 그보다 크면 턴 동작을 쓴다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float FacingStepMinAngle = 32.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float FacingStepMaxAngle = 70.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float FacingStepDoneAngle = 12.f;
+    // ---- 플레이어의 가드 ----
+    /** 저스트 가드: 맞기 직전 이 시간 안에 올린 가드는 피해를 받지 않는다(보통 가드는 20%를 받는다). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Guard Reward") float JustGuardWindow = .25f;
+    /** 뒤쪽 대응을 요청하는 동안만 참: 정면 조건을 건너뛰고 카드를 바꿀 수 있다. */
+    bool bRearResponseScope = false;
+    TWeakObjectPtr<UObject> RearCard;
     UPROPERTY(BlueprintReadOnly, Category="Boss|Intent") FString Status;
 private:
     void Advance();
@@ -52,6 +154,7 @@ private:
     double NextPlanAt = 0.0;
     float PreviousSpeed = 0.f;
     float GoalMaxDistance = 0.f;
+    float GoalMinDistance = 0.f;
     int32 ConsecutiveEntryFailures = 0;
     double LastEntryFailureAt = -1.0;
     double ReassessUntil = 0.0;
@@ -68,6 +171,114 @@ private:
     UPROPERTY(Transient) TObjectPtr<UParticleSystemComponent> UpperChargeFX;
     bool bGuardOverlayActive = false;
     bool bUpperBurstPlayed = false;
+    /** 전진 애니메이션(RunIn)의 전진량을 시작 거리에 맞춰 줄인다. 전진 구간마다 한 번 정한다. */
+    void UpdateTravelScale();
+    void UpdateComboStages();
+    void UpdateChain(float Elapsed, float Remaining);
+    bool RequestSlot(int32 SlotIndex);
+    void AddExtraCards();
+    int32 ChainWantedId = -1;        // 이번 후딜에서 이으려는 공격(없으면 -1)
+    int32 ChainSlot = INDEX_NONE;    // 후딜을 끊었고, Ready가 되면 바로 요청할 자리
+    bool bChainedAttack = false;     // 지금 공격이 연계로 나온 것인가
+    int32 ChainDepth = 0;            // 지금 공격이 몰아치기(연계·추격)의 몇 번째인가(0 = 첫 공격). 세 번까지만 잇는다
+    bool bPursuitWanted = false;     // 이번 후딜에서 멀어진 플레이어를 쫓을 것인가
+    bool bPursuitExit = false;       // 추격으로 후딜을 끊었다: 발놀림 없이 바로 고른다
+    void UpdateWhiff();
+    bool TryFacingStep();
+    bool bFacingStep = false;        // 지금 기동이 "각 맞추는 걸음"인가
+    bool bWasAttacking = false;
+    bool bAttackConnected = false;   // 이번 공격이 닿았는가(맞혔거나 막혔다)
+    bool bWhiffed = false;           // 이번 후딜은 헛친 뒤의 후딜인가
+    bool bAttackHit = false;         // 이번 공격이 피해를 줬는가(막힌 것은 아니다)
+    bool bRecoveryOpen = false;      // 후딜의 하위 상태: 거짓 = 닫힘(어떤 이유로도 못 나감), 참 = 열림(규칙이 맞으면 나감)
+    struct FAttackOutcome { int32 Whiffs = 0; bool bHit = false; double At = -1.0; };
+    TMap<int32, FAttackOutcome> OutcomeBySlot;
+    double WhiffPlayerHealth = -1.0;
+    double WhiffPressure = -1.0;
+    float BowPitch = 0.f;
+    float BowVelocity = 0.f;
+    float BreathNow = 0.f;
+    bool bExtraCardsAdded = false;
+    void UpdateLook(float DeltaTime);
+    void UpdateHealthBar(float DeltaTime);
+    void UpdateGuardReward();
+    void ShowNotice(const FString& Message);
+    double LastGuardPressure = -1.0;
+    double LastPlayerHealth = -1.0;
+    FString BarNotice;
+    double BarNoticeUntil = -1.0;
+    TSharedPtr<class SBossHealthBar> HealthBar;
+    float BarTrail = 1.f;
+    float BarDamage = 0.f;
+    float BarOpacity = 0.f;
+    double BarLastHitAt = -100.0;
+    double BarDeadAt = -1.0;
+    double BarHealth = -1.0;
+    /** 맞은 시각들(최근 것만). "붙어서 계속 때리는 플레이어"를 알아보는 데 쓴다. */
+    TArray<double> HitTimes;
+    void UpdateFlinch(float DeltaTime);
+    /** 도발과 대기 변주. 도발 중이면 참을 돌려준다(그동안 다른 이동 처리를 하지 않는다). */
+    bool UpdatePerformance(float DeltaTime);
+    float LookYaw = 0.f;
+    bool bLookConfigured = false;
+    double LastHealth = -1.0;
+    FVector FlinchOffset = FVector::ZeroVector;
+    FVector FlinchVelocity = FVector::ZeroVector;
+    FVector MeshBaseLocation = FVector::ZeroVector;
+    bool bMeshBaseSaved = false;
+    bool bPerforming = false;
+    bool bKnockdownTaunted = false;
+    double PerformUntil = 0.0;
+    double NextTauntAt = 0.0;
+    double NextLaughAt = 0.0;
+    double IdleSince = -1.0;
+    double NextIdleVariationAt = 0.0;
+    UPROPERTY(Transient) TObjectPtr<class UAnimMontage> PerformMontage;
+    UPROPERTY(Transient) TObjectPtr<class UAnimMontage> IdleVariationMontage;
+    int32 ComboStage = 0;
+    float ComboLastPosition = 0.f;
+    void UpdateRecoveryTurn(float DeltaTime);
+    void TryRearResponse();
+    void UpdateSprint();
+    void UpdateTurnSync();
+    UPROPERTY(Transient) TObjectPtr<class UAnimMontage> SprintMontage;
+    TWeakObjectPtr<const class UAnimMontage> SyncedTurnMontage;
+    float SavedTurnSpeed = -1.f;
+    float RearTurnRate = 300.f;
+    bool bApproachSpeedApplied = false;
+public:
+    /** 추첨 직후 한 프레임 동안만: 당첨 표시를 지우고 화면에 보일 진짜 점수로 되돌릴 값. */
+    TArray<double> TrueWeights;
+    bool bRestoreWeights = false;
+private:
+    void RestoreTrueWeights();
+    bool bFlankExitDone = false;
+    void TryFootwork();
+    void TickFootwork(float DeltaTime);
+    void EndFootwork(bool bReturnToReady, const FString& Reason);
+    bool bFootworkActive = false;
+    void BeginFootworkLeg();
+    /** 이번 기동의 걸음들(EBossPositionAction 값). 계획이 낸 순서 그대로 하나씩 한다. */
+    TArray<uint8> FootworkLegs;
+    int32 FootworkLegIndex = 0;
+    double FootworkLegStartedAt = 0.0;
+    float LegSweepTarget = 0.f;      // 돌기: 플레이어 둘레로 돌 각도
+    float LegSwept = 0.f;
+    float LegLastBearing = 0.f;
+    float LegRadius = 0.f;           // 돌기: 유지할 간격
+    float CircleSweepWanted = 0.f;
+    bool bLegFlipped = false;
+    double FootworkStartedAt = 0.0;
+    float FootworkSpeedBefore = 0.f;
+    /** 발을 옮기지 않고 연달아 친 공격 수. 발놀림을 하거나 공격하러 걸어 들어가면 0으로 돌아간다. */
+    int32 AttackStreak = 0;
+    FVector LastRecoveryLocation = FVector::ZeroVector;
+    void UpdateRearResponse(float DeltaTime);
+    bool bRearResponseActive = false;
+    double RearResponseReadyAt = 0.0;
+    double RecoveryStartedAt = -1.0;
+    TWeakObjectPtr<const class UAnimMontage> TravelMontage;
+    float TravelBurstEnd = -1.f;
 };
 
 UCLASS()

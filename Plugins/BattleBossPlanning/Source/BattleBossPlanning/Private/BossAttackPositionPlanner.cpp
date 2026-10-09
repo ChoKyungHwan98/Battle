@@ -101,8 +101,110 @@ FBossPositionPlan UBossPositionPlanner::PlanAttackEntry(
         bForwardOpen, bBackOpen, bLeftEntryOpen, bRightEntryOpen, false, MoveSpeed, true);
 }
 
+FBossPositionPlan UBossPositionPlanner::PlanFootwork(
+    float Distance, float FacingDot, float CrowdDistance, float PocketDistance, float MinimumFacingDot,
+    bool bBackOpen, bool bLeftOpen, bool bRightOpen, bool bForwardOpen,
+    bool bWantSpace, bool bWantAngle, bool bWantPocket,
+    float BackCost, float LeftCost, float RightCost, float PressCost)
+{
+    FBossPositionPlan Result;
+    Result.Goal = EBossPositionGoal::Footwork;
+    if (!FMath::IsFinite(Distance) || !FMath::IsFinite(FacingDot) || !FMath::IsFinite(CrowdDistance) || !FMath::IsFinite(PocketDistance))
+    {
+        Result.Reason = TEXT("Invalid footwork input");
+        return Result;
+    }
+    constexpr uint8 Spaced = 1, Facing = 2, Angled = 4, InPocket = 8;
+    const uint8 Initial = (Distance >= CrowdDistance ? Spaced : 0) | (FacingDot >= MinimumFacingDot ? Facing : 0)
+        | (Distance <= PocketDistance ? InPocket : 0);
+    const uint8 Goal = Facing | (bWantSpace ? Spaced : 0) | (bWantAngle ? Angled : 0) | (bWantPocket ? InPocket : 0);
+    struct FStep { EBossPositionAction Action; uint8 Add, Remove; bool Available; float Cost; };
+    const FStep Steps[] = {
+        // 움직이고 나면 정면인지 다시 확인해야 한다(칠 자리 만들기와 같은 규칙).
+        {EBossPositionAction::StepBack, Spaced, Facing, Distance < CrowdDistance && bBackOpen, FMath::Max(.05f, BackCost)},
+        {EBossPositionAction::FaceTarget, Facing, 0, true, .25f},
+        // 옆으로 돌 때는 간격이 확보되는 반지름을 따라 돈다: 붙어 있었다면 한 번에 간격과 각을 함께 얻는다.
+        {EBossPositionAction::OrbitLeft, uint8(Spaced | Angled), Facing, bLeftOpen, .65f + FMath::Max(0.f, LeftCost)},
+        {EBossPositionAction::OrbitRight, uint8(Spaced | Angled), Facing, bRightOpen, .65f + FMath::Max(0.f, RightCost)},
+        // 걸어 들어가 조이기: 주먹 거리 밖에 있을 때만.
+        {EBossPositionAction::DirectApproach, InPocket, Facing, Distance > PocketDistance && bForwardOpen, FMath::Max(.05f, PressCost)}
+    };
+    struct FNode { uint8 Facts; float Cost; TArray<EBossPositionAction> Actions; };
+    TArray<FNode> Open;
+    Open.Add({Initial, 0.f, {}});
+    float Best[16];
+    for (float& Cost : Best) Cost = TNumericLimits<float>::Max();
+    Best[Initial] = 0.f;
+    while (!Open.IsEmpty())
+    {
+        int32 Cheapest = 0;
+        for (int32 I = 1; I < Open.Num(); ++I)
+            if (Open[I].Cost < Open[Cheapest].Cost) Cheapest = I;
+        FNode Current = MoveTemp(Open[Cheapest]);
+        Open.RemoveAtSwap(Cheapest, EAllowShrinking::No);
+        if (Current.Cost > Best[Current.Facts]) continue;
+        if ((Current.Facts & Goal) == Goal)
+        {
+            Result.bFound = true;
+            Result.Steps = MoveTemp(Current.Actions);
+            Result.FirstAction = Result.Steps.IsEmpty() ? EBossPositionAction::None : Result.Steps[0];
+            Result.TotalCost = Current.Cost;
+            Result.Reason = FString::Printf(TEXT("Footwork: %d steps"), Result.Steps.Num());
+            return Result;
+        }
+        for (const FStep& Step : Steps)
+        {
+            if (!Step.Available) continue;
+            const uint8 Next = (Current.Facts & ~Step.Remove) | Step.Add;
+            const float Cost = Current.Cost + Step.Cost;
+            if (Next == Current.Facts || Cost >= Best[Next]) continue;
+            Best[Next] = Cost;
+            FNode Candidate = Current;
+            Candidate.Facts = Next;
+            Candidate.Cost = Cost;
+            Candidate.Actions.Add(Step.Action);
+            Open.Add(MoveTemp(Candidate));
+        }
+    }
+    Result.Reason = TEXT("No room for footwork");
+    return Result;
+}
+
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossFootworkPlanTest, "Battle.GOAP.Footwork",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FBossFootworkPlanTest::RunTest(const FString& Parameters)
+{
+    using A = EBossPositionAction;
+    struct FQ { float D = 172; bool Back = true, Left = true, Right = true, Forward = true;
+        bool Space = false, Angle = false, Pocket = false; float LeftCost = 0, RightCost = 0; };
+    auto Plan = [](const FQ& Q)
+    { return UBossPositionPlanner::PlanFootwork(Q.D, 1, 200, 300, .5f, Q.Back, Q.Left, Q.Right, Q.Forward,
+        Q.Space, Q.Angle, Q.Pocket, .5f, Q.LeftCost, Q.RightCost, .6f); };
+    FQ Q;
+    Q = FQ(); Q.D = 260;
+    TestTrue(TEXT("Nothing wanted: nothing to do"), Plan(Q).Steps.IsEmpty());
+    Q = FQ(); Q.Space = true;
+    TestEqual(TEXT("Crowded: step back to make room"), Plan(Q).FirstAction, A::StepBack);
+    Q = FQ(); Q.Space = true; Q.Back = Q.Left = false;
+    TestEqual(TEXT("Crowded with a wall behind: pivot out sideways"), Plan(Q).FirstAction, A::OrbitRight);
+    Q = FQ(); Q.Space = Q.Angle = true; Q.Right = false;
+    TestEqual(TEXT("Crowded and an angle wanted: one side move does both"), Plan(Q).FirstAction, A::OrbitLeft);
+    TestEqual(TEXT("...in one move plus facing"), Plan(Q).Steps.Num(), 2);
+    Q = FQ(); Q.D = 260; Q.Angle = true; Q.LeftCost = .4f;
+    TestEqual(TEXT("Cheaper side wins"), Plan(Q).FirstAction, A::OrbitRight);
+    Q = FQ(); Q.D = 400; Q.Pocket = true;
+    TestEqual(TEXT("Out of punching range: walk in"), Plan(Q).FirstAction, A::DirectApproach);
+    Q = FQ(); Q.D = 400; Q.Pocket = Q.Angle = true;
+    TestEqual(TEXT("Walk in and change the angle: two moves, then face"), Plan(Q).Steps.Num(), 3);
+    Q = FQ(); Q.Space = true; Q.Back = Q.Left = Q.Right = false;
+    TestFalse(TEXT("Cornered boss: no plan, so it simply attacks"), Plan(Q).bFound);
+    Q = FQ(); Q.D = 400; Q.Pocket = true; Q.Forward = false;
+    TestFalse(TEXT("Blocked ahead: cannot walk in"), Plan(Q).bFound);
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossAttackPositionTest, "Battle.GOAP.SelectedAttack",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FBossAttackPositionTest::RunTest(const FString& Parameters)
