@@ -230,6 +230,32 @@ def retreat_scenario(seconds=90, lead=.7, memory=1):
             'steps': steps, 'teardown': {'stop_pie': True}}
 
 
+def behind(distance=420.):
+    """Put the player straight behind the boss (too far for the rear hook), to force a turn in place."""
+    w, b, p = fixture.actors()
+    if 'Ready' in b.get_editor_property('BossState').export_text() or 'Recovery' in b.get_editor_property('BossState').export_text():
+        f = b.get_actor_forward_vector()
+        here = b.get_actor_location()
+        z = p.get_actor_location().z
+        spot = unreal.Vector(here.x - f.x * distance, here.y - f.y * distance, z)
+        hit = unreal.SystemLibrary.line_trace_single(w, unreal.Vector(here.x, here.y, z), spot, unreal.TraceTypeQuery.TRACE_TYPE_QUERY1,
+            False, [b, p], unreal.DrawDebugTrace.NONE, True)
+        if hit is None: p.set_actor_location(spot, False, False)
+    for _ in range(4): heal()
+    return 1
+
+
+def turn_scenario(seconds=60, every=4.):
+    m = "__import__('TestBossSprint')"
+    steps = [{'action': 'start_pie'}, {'action': 'wait_for_pie', 'timeout_seconds': 30}, {'action': 'wait', 'seconds': 8.},
+             {'action': 'python_assert_number', 'expression': f'{m}.begin(300)', 'operator': 'eq', 'expected': 1}]
+    for _ in range(int(seconds // every)):
+        steps += [{'action': 'wait', 'seconds': every}, {'action': 'python_assert_number', 'expression': f'{m}.behind()', 'operator': 'eq', 'expected': 1}]
+    steps += [{'action': 'python_assert_number', 'expression': f'{m}.finish()', 'operator': 'eq', 'expected': 1}]
+    return {'name': 'Boss turning in place', 'dependencies': ['Tools/TestBossSprint.py', 'Tools/TestDonorPunch.py'],
+            'steps': steps, 'teardown': {'stop_pie': True}}
+
+
 def poke():
     """Hit the boss lightly (to exercise the flinch) and keep the player alive."""
     w, b, p = fixture.actors()

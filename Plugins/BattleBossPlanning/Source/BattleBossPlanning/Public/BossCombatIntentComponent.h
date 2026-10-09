@@ -45,6 +45,8 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Sprint") float SprintNaturalSpeed = 686.f;
     /** 제자리 턴 동작이 도는 속도(도/초). 턴 동작의 재생 속도와 몸의 회전을 이 값에 함께 맞춘다. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Turn") float TurnMontageSpeed = 130.f;
+    /** 제자리 턴 동작의 재생 속도. 몸의 회전은 동작 안의 커브를 따라간다(발이 디디는 만큼만 돈다). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Turn") float TurnPlayRate = 1.1f;
     /** 후딜의 길이에 곱하는 값. 1이면 카드에 적힌 그대로, 0.7이면 30% 짧다. 동작도 같은 비율로 빨리 끝난다. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Recovery") float RecoveryScale = .7f;
     /** 후딜이 이만큼 지났을 때 플레이어가 FlankExitAngle 넘게 옆·뒤에 있으면 후딜을 일찍 끝낸다. */
@@ -268,6 +270,10 @@ private:
     UPROPERTY(Transient) TObjectPtr<class UAnimMontage> SprintMontage;
     TWeakObjectPtr<const class UAnimMontage> SyncedTurnMontage;
     float SavedTurnSpeed = -1.f;
+    float TurnStartYaw = 0.f;        // 제자리 턴: 시작할 때의 방향
+    float TurnTotal = 0.f;           // 돌아야 할 각도(부호 있음)
+    float TurnCurveStart = 0.f;      // 턴 동작의 커브가 시작할 때 가리키는 각도
+    float TurnStepEnd = 0.f;         // 발이 다 디디는 시각(동작 안의 초)
     float RearTurnRate = 300.f;
     bool bApproachSpeedApplied = false;
 public:

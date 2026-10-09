@@ -1259,8 +1259,10 @@ void UBossCombatIntentComponent::UpdateSprint()
         Anim->Montage_Play(SprintMontage, Rate);
 }
 
-// 제자리 턴: 예전에는 몸은 1초 만에 돌고 턴 동작은 2.5초 동안 재생되어, 다 돌아놓고 발만 구르며 서 있었다.
-// 돌아야 할 각도에서 걸릴 시간을 정하고, 턴 동작의 재생 속도·몸의 회전 속도·"턴 중" 대기 시간을 그 시간에 함께 맞춘다.
+// 제자리 턴. 이 턴 동작은 앞쪽 0.8~0.9초 동안만 발을 옮기고 나머지 1.5초는 자세를 고르는 동작이다. 동작 안에는
+// "아직 돌아야 할 각도"가 커브(DistanceCurve)로 들어 있다(180 -> 0).
+// 전에는 몸을 일정한 속도로 돌렸다. 그래서 발이 다 디딘 뒤에도 몸은 계속 돌아서, 발을 둔 채 스르륵 미끄러지며 돌아보는 것으로 보였다.
+// 이제 몸의 방향을 그 커브에 맞춘다: 발이 디디는 만큼만 몸이 돌고, 발이 멈추면 몸도 멈춘다. 다 돌면 남은 동작은 기다리지 않고 끝낸다.
 void UBossCombatIntentComponent::UpdateTurnSync()
 {
     ACharacter* Boss = Cast<ACharacter>(GetOwner());
@@ -1278,22 +1280,40 @@ void UBossCombatIntentComponent::UpdateTurnSync()
         }
         return;
     }
-    if (SyncedTurnMontage.Get() == Active) return;
-    SyncedTurnMontage = Active;
-    const AActor* Player = Cast<AActor>(Object(Boss, TEXT("ObservedPlayer")));
-    if (!IsValid(Player)) Player = UGameplayStatics::GetPlayerPawn(this, 0);
-    if (!IsValid(Player)) return;
-    const float Angle = FMath::Abs(FMath::FindDeltaAngleDegrees(Boss->GetActorRotation().Yaw,
-        (Player->GetActorLocation() - Boss->GetActorLocation()).Rotation().Yaw));
-    const float Length = Active->GetPlayLength();
-    const float Duration = TurnDuration(Angle, TurnMontageSpeed);
-    Anim->Montage_SetPlayRate(Active, Length / Duration);
-    if (SavedTurnSpeed < 0.f) SavedTurnSpeed = static_cast<float>(Number(Boss, TEXT("TurnSpeed"), 160.0));
-    SetNumber(Boss, TEXT("TurnSpeed"), Angle / Duration);
-    // 블루프린트는 "턴 동작이 끝나는 시각"까지 판단을 미룬다. 줄어든 길이만큼 그 시각을 당긴다.
-    const double Until = Number(Boss, TEXT("TurnAnimationUntil"));
-    if (Until > 0.0) SetNumber(Boss, TEXT("TurnAnimationUntil"), Until - (Length - Duration));
-    Invoke(Boss, TEXT("RecordCombatQA"), TEXT("turn_synced"));
+    const UAnimSequenceBase* Clip = Active->SlotAnimTracks.Num() && Active->SlotAnimTracks[0].AnimTrack.AnimSegments.Num()
+        ? Active->SlotAnimTracks[0].AnimTrack.AnimSegments[0].GetAnimReference().Get() : nullptr;
+    const auto Left = [&](float Position)       // 그 시각에 아직 돌아야 할 각도(커브의 절댓값)
+    { return Clip ? FMath::Abs(Clip->EvaluateCurveData(TEXT("DistanceCurve"), FAnimExtractContext(static_cast<double>(Position)))) : 0.f; };
+    if (SyncedTurnMontage.Get() != Active)
+    {
+        SyncedTurnMontage = Active;
+        const AActor* Player = Cast<AActor>(Object(Boss, TEXT("ObservedPlayer")));
+        if (!IsValid(Player)) Player = UGameplayStatics::GetPlayerPawn(this, 0);
+        if (!IsValid(Player)) return;
+        TurnStartYaw = Boss->GetActorRotation().Yaw;
+        TurnTotal = FMath::FindDeltaAngleDegrees(TurnStartYaw, (Player->GetActorLocation() - Boss->GetActorLocation()).Rotation().Yaw);
+        TurnCurveStart = Left(0.f);
+        // 발이 다 디디는 시각: 커브가 0에 닿는 때.
+        const float Length = Active->GetPlayLength();
+        TurnStepEnd = Length;
+        if (TurnCurveStart > 1.f)
+            for (float T = 0.f; T < Length; T += 1.f / 30.f)
+                if (Left(T) < 1.f) { TurnStepEnd = T; break; }
+        Anim->Montage_SetPlayRate(Active, TurnPlayRate);
+        // 몸은 이 컴포넌트가 커브대로 돌린다. 블루프린트가 일정한 속도로 돌리는 것은 끈다.
+        if (SavedTurnSpeed < 0.f) SavedTurnSpeed = static_cast<float>(Number(Boss, TEXT("TurnSpeed"), 160.0));
+        SetNumber(Boss, TEXT("TurnSpeed"), 0.0);
+        // 블루프린트는 "턴 동작이 끝나는 시각"까지 판단을 미룬다. 발이 다 디딘 직후로 당긴다.
+        if (Number(Boss, TEXT("TurnAnimationUntil")) > 0.0)
+            SetNumber(Boss, TEXT("TurnAnimationUntil"), GetWorld()->GetTimeSeconds() + TurnStepEnd / FMath::Max(.1f, TurnPlayRate) + .12);
+        Invoke(Boss, TEXT("RecordCombatQA"), TEXT("turn_synced"));
+    }
+    const float Position = Anim->Montage_GetPosition(Active);
+    const float Done = TurnCurveStart > 1.f ? 1.f - FMath::Clamp(Left(Position) / TurnCurveStart, 0.f, 1.f)
+        : FMath::Clamp(Position / FMath::Max(.1f, TurnStepEnd), 0.f, 1.f);
+    Boss->SetActorRotation(FRotator(0.f, TurnStartYaw + TurnTotal * Done, 0.f));
+    // 다 돌았으면 자세를 고르는 나머지 동작은 섞어서 끝낸다(서서 기다리지 않는다).
+    if (Position >= TurnStepEnd + .05f) Anim->Montage_Stop(.25f, Active);
 }
 
 bool UBossCombatIntentComponent::ReachableCenter(const FVector& Desired, FVector& Center) const
