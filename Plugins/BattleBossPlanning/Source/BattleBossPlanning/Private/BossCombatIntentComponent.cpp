@@ -2521,8 +2521,6 @@ void UBossCombatIntentComponent::UpdateAIPanel()
     {
         PanelModeApplied = PanelMode;
         ShowOldDebugPanel(GetWorld(), PanelMode == 2);
-        // 블루프린트가 화면 왼쪽 위에 찍는 개발용 글자(BOSS HP 등)도 같이 정리한다.
-        if (GEngine) GEngine->bEnableOnScreenDebugMessages = PanelMode == 2;
     }
     AIPanel->Opacity = PanelMode == 1 && FirstDecisionAt >= 0.0 && Number(Boss, TEXT("CurrentHealth")) > 0 ? 1.f : 0.f;
     if (AIPanel->Opacity <= 0.f) return;

@@ -287,6 +287,15 @@ def panel_scenario():
     return {'name': 'AI overlay screenshots', 'dependencies': ['Tools/TestBossSprint.py', 'Tools/TestDonorPunch.py'], 'steps': steps, 'teardown': {'stop_pie': True}}
 
 
+def start_scenario():
+    """Screenshots at the very start (intro) and a few seconds in: nothing from the old debug UI should be on screen."""
+    m = "__import__('TestBossSprint')"
+    call = lambda e: {'action': 'python_assert_number', 'expression': f'{m}.{e}', 'operator': 'eq', 'expected': 1}
+    steps = [{'action': 'start_pie'}, {'action': 'wait_for_pie', 'timeout_seconds': 30}, {'action': 'wait', 'seconds': 2.}, call('shot_only()'),
+             {'action': 'wait', 'seconds': 9.}, call('shot_only()'), {'action': 'wait', 'seconds': 1.5}]
+    return {'name': 'Start screen', 'dependencies': ['Tools/TestBossSprint.py', 'Tools/TestDonorPunch.py'], 'steps': steps, 'teardown': {'stop_pie': True}}
+
+
 def poke():
     """Hit the boss lightly (to exercise the flinch) and keep the player alive."""
     w, b, p = fixture.actors()
