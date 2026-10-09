@@ -25,6 +25,7 @@
 #include "Materials/MaterialInterface.h"
 #include "GameFramework/PlayerController.h"
 #include "Camera/CameraShakeBase.h"
+#include "BossAIPanelWidget.h"
 #include <limits>
 
 namespace
@@ -1145,7 +1146,18 @@ void UBossCombatIntentComponent::UpdateChain(float Elapsed, float Remaining)
     LinkAngle = Angle;
     UKismetSystemLibrary::K2_ClearTimer(Boss, TEXT("FinishCombatAction"));
     SetText(Boss, TEXT("IntentReason"), Plan.Num() >= 2 ? TEXT("이어 치기: 두 번 더 잇는다") : TEXT("이어 치기: 한 번 더 잇는다"));
-    SetText(Boss, TEXT("GoapReason"), FString::Printf(TEXT("이어 치기 계획: %d번 (%.0fcm, %.0f°)"), Plan.Num(), Distance, Angle));
+    {
+        // 계획을 사람이 읽는 한 줄로: "오른손 → 내려찍기로 끝낸다".
+        static const TCHAR* Names[] = {TEXT("왼손"), TEXT("오른손"), TEXT("어퍼컷"), TEXT("휩쓸기")};
+        FString Line;
+        for (const FStringStep& Step : Plan)
+        {
+            Line += Line.IsEmpty() ? TEXT("") : TEXT(" → ");
+            Line += Step.bRunIn ? TEXT("달려들며 ") : (Angle > 40.f && &Step == &Plan[0] ? TEXT("돌아서며 ") : TEXT(""));
+            Line += Step.Id == OverheadId ? TEXT("내려찍기") : (Step.Id >= 0 && Step.Id < 4 ? Names[Step.Id] : TEXT("?"));
+        }
+        SetText(Boss, TEXT("GoapReason"), FString::Printf(TEXT("이어 치기: %s%s"), *Line, IsFinisher(Plan.Last().Id) ? TEXT("로 끝낸다") : TEXT("")));
+    }
     Invoke(Boss, TEXT("FinishCombatAction"));      // Ready가 되면 RecordAttackRecoveryEnd가 ChainSlot을 요청한다
 }
 
@@ -1302,7 +1314,9 @@ void UBossCombatIntentComponent::UpdateTurnSync()
         Anim->Montage_SetPlayRate(Active, TurnPlayRate);
         // 몸은 이 컴포넌트가 커브대로 돌린다. 블루프린트가 일정한 속도로 돌리는 것은 끈다.
         if (SavedTurnSpeed < 0.f) SavedTurnSpeed = static_cast<float>(Number(Boss, TEXT("TurnSpeed"), 160.0));
-        SetNumber(Boss, TEXT("TurnSpeed"), 0.0);
+        // 0으로 두면 안 된다: 엔진의 "일정 속도로 돌리기"는 속도가 0 이하이면 목표 방향으로 한 번에 돌려 버린다.
+        // (맞는 순간 보스가 한 프레임에 플레이어를 돌아보는 버그가 이것이었다.)
+        SetNumber(Boss, TEXT("TurnSpeed"), .01);
         // 블루프린트는 "턴 동작이 끝나는 시각"까지 판단을 미룬다. 발이 다 디딘 직후로 당긴다.
         if (Number(Boss, TEXT("TurnAnimationUntil")) > 0.0)
             SetNumber(Boss, TEXT("TurnAnimationUntil"), GetWorld()->GetTimeSeconds() + TurnStepEnd / FMath::Max(.1f, TurnPlayRate) + .12);
@@ -2161,6 +2175,7 @@ void UBossCombatIntentComponent::TickComponent(float DeltaTime, ELevelTick TickT
     UpdateGuardReward();
     UpdateFlinch(DeltaTime);
     UpdateHealthBar(DeltaTime);
+    UpdateAIPanel();
     RestoreTrueWeights();
     if (UpdatePerformance(DeltaTime)) return;
     if (bReassessing) { TickReassessment(DeltaTime); return; }
@@ -2201,6 +2216,11 @@ void UBossCombatIntentComponent::EndPlay(const EEndPlayReason::Type Reason)
     {
         if (UGameViewportClient* Viewport = GetWorld() ? GetWorld()->GetGameViewport() : nullptr) Viewport->RemoveViewportWidgetContent(HealthBar.ToSharedRef());
         HealthBar.Reset();
+    }
+    if (AIPanel.IsValid())
+    {
+        if (UGameViewportClient* Viewport = GetWorld() ? GetWorld()->GetGameViewport() : nullptr) Viewport->RemoveViewportWidgetContent(AIPanel.ToSharedRef());
+        AIPanel.Reset();
     }
     Super::EndPlay(Reason);
 }
@@ -2452,6 +2472,99 @@ int32 ReachableAttackCount(const AActor* Boss, float Distance)
     }
     return Count;
 }
+}
+
+namespace
+{
+// 화면 표시 방식. 0 = 끔(영상 촬영용), 1 = 새 표시, 2 = 예전 글자 패널.
+int32 PanelMode = 1;
+FAutoConsoleVariableRef CVarPanelMode(TEXT("boss.Panel"), PanelMode, TEXT("0 = no AI overlay, 1 = HFSM / Utility / GOAP overlay, 2 = the old text panel."));
+
+const TCHAR* ShortAttackLabel(int32 Id)
+{
+    static const TCHAR* Labels[] = {TEXT("왼손"), TEXT("오른손"), TEXT("어퍼컷"), TEXT("휩쓸기"), TEXT("잽잽훅"), TEXT("가드 브레이크"),
+        TEXT("슈퍼맨 펀치"), TEXT("달려오기"), TEXT("점프 내려찍기"), TEXT("2연타"), TEXT("내려찍기")};
+    return Id >= 0 && Id < UE_ARRAY_COUNT(Labels) ? Labels[Id] : TEXT("?");
+}
+
+// 예전 글자 패널(블루프린트 위젯)을 보이거나 숨긴다. UMG 모듈에 기대지 않도록 이름과 리플렉션으로 부른다.
+void ShowOldDebugPanel(UWorld* World, bool bShow)
+{
+    UClass* PanelClass = FindFirstObject<UClass>(TEXT("WBP_BossAIDebug_C"), EFindFirstObjectOptions::NativeFirst);
+    if (!PanelClass) return;
+    TArray<UObject*> Panels;
+    GetObjectsOfClass(PanelClass, Panels, true, RF_ClassDefaultObject);
+    for (UObject* Panel : Panels)
+    {
+        if (!IsValid(Panel) || Panel->GetWorld() != World) continue;
+        if (UFunction* Set = Panel->FindFunction(TEXT("SetVisibility")))
+        {
+            uint8 Visibility = bShow ? 3 : 1;      // ESlateVisibility: 1 = Collapsed, 3 = HitTestInvisible
+            Panel->ProcessEvent(Set, &Visibility);
+        }
+    }
+}
+}
+
+void UBossCombatIntentComponent::UpdateAIPanel()
+{
+    AActor* Boss = GetOwner();
+    UGameViewportClient* Viewport = GetWorld() && GetWorld()->IsGameWorld() ? GetWorld()->GetGameViewport() : nullptr;
+    if (!Viewport || GetWorld()->GetMapName().Contains(TEXT("Lvl_BossMotionLab"))) return;
+    if (!AIPanel.IsValid())
+    {
+        AIPanel = SNew(SBossAIPanel);
+        Viewport->AddViewportWidgetContent(AIPanel.ToSharedRef(), 4);
+    }
+    // 예전 패널은 늦게 만들어질 수 있어서, 숨기는 것은 가끔 다시 한다.
+    if (PanelModeApplied != PanelMode || (PanelMode != 2 && GFrameCounter % 60 == 0))
+    {
+        PanelModeApplied = PanelMode;
+        ShowOldDebugPanel(GetWorld(), PanelMode == 2);
+        // 블루프린트가 화면 왼쪽 위에 찍는 개발용 글자(BOSS HP 등)도 같이 정리한다.
+        if (GEngine) GEngine->bEnableOnScreenDebugMessages = PanelMode == 2;
+    }
+    AIPanel->Opacity = PanelMode == 1 && FirstDecisionAt >= 0.0 && Number(Boss, TEXT("CurrentHealth")) > 0 ? 1.f : 0.f;
+    if (AIPanel->Opacity <= 0.f) return;
+    const bool bRecovery = StateIs(Boss, TEXT("Boss.Combat.Attack.Recovery"));
+    AIPanel->Stage = StateIs(Boss, TEXT("Boss.Combat.Position")) ? 1
+        : (StateIs(Boss, TEXT("Boss.Combat.Attack.Telegraph")) || StateIs(Boss, TEXT("Boss.Combat.Attack.Windup")) ? 2
+        : (StateIs(Boss, TEXT("Boss.Combat.Attack.Active")) || StateIs(Boss, TEXT("Boss.Combat.Attack.Link")) ? 3
+        : (bRecovery ? (bRecoveryOpen ? 5 : 4) : 0)));
+    FString Why = Text(Boss, TEXT("TransitionReason"));
+    if (bRecovery) Why = FString::Printf(TEXT("%s  ·  %s"), bWhiffed ? TEXT("헛쳤다") : (bAttackHit ? TEXT("맞혔다") : TEXT("막혔다")),
+        bRecoveryOpen ? TEXT("이제 다음 행동으로 넘어갈 수 있다") : TEXT("플레이어의 반격 시간"));
+    AIPanel->Reason = FText::FromString(Why);
+    FString Names;
+    for (const int32 Id : StringUsed) Names += (Names.IsEmpty() ? TEXT("") : TEXT(" → ")) + FString(ShortAttackLabel(Id));
+    AIPanel->StringDone = StringUsed.Num();
+    AIPanel->StringWanted = FMath::Max(StringHitsWanted, StringUsed.Num());
+    AIPanel->StringText = FText::FromString(Names);
+    AIPanel->Plan = FText::FromString(Text(Boss, TEXT("GoapReason")));
+    const AActor* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+    if (IsValid(Player))
+    {
+        const float Live = FVector::Dist2D(Boss->GetActorLocation(), Player->GetActorLocation());
+        const float Away = PlayerSpeedAway();
+        AIPanel->Distance = FText::FromString(FMath::Abs(Away) >= 60.f
+            ? FString::Printf(TEXT("거리 %.0fcm → 0.8초 뒤 %.0fcm  ·  닿는 공격 %d개"), Live, PredictedDistance(Live, Away, .8f), ReachableAttackCount(Boss, Live))
+            : FString::Printf(TEXT("거리 %.0fcm  ·  닿는 공격 %d개"), Live, ReachableAttackCount(Boss, Live)));
+    }
+    // 마지막 판단의 점수(높은 순서). 뽑힌 자리는 표시한다.
+    AIPanel->Scores.Reset();
+    const int32 Picked = UtilityWinner;
+    for (int32 I = 0; I < TrueWeights.Num(); ++I)
+    {
+        const UObject* Card = CardAtSlot(Boss, I);
+        if (!Card || (TrueWeights[I] <= 0.0 && I != Picked)) continue;
+        const int32 Id = static_cast<int32>(Number(Card, TEXT("ActionId"), -1));
+        SBossAIPanel::FScore Row;
+        Row.Label = FText::FromString(FString(ShortAttackLabel(Id)) + (IsMidPattern(Id, static_cast<float>(Number(Card, TEXT("MinDistance")))) ? TEXT(" · 달려들며") : TEXT("")));
+        Row.Value = static_cast<float>(TrueWeights[I]);
+        Row.bPicked = I == Picked;
+        AIPanel->Scores.Add(Row);
+    }
+    AIPanel->Scores.Sort([](const SBossAIPanel::FScore& A, const SBossAIPanel::FScore& B) { return A.Value > B.Value; });
 }
 
 FString UBossCombatIntentLibrary::DescribeCombatDebug(AActor* Boss)
@@ -2763,6 +2876,7 @@ void UBossCombatIntentLibrary::FinalizeIntentScores(AActor* Boss)
     if (auto* Intent = Boss->FindComponentByClass<UBossCombatIntentComponent>())
     {
         Intent->TrueWeights = Weights;
+        Intent->UtilityWinner = Winner;
         Intent->bRestoreWeights = Winner != INDEX_NONE;
     }
     SetNumber(Boss, TEXT("UtilityTotalScore"), Total);

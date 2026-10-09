@@ -230,14 +230,14 @@ def retreat_scenario(seconds=90, lead=.7, memory=1):
             'steps': steps, 'teardown': {'stop_pie': True}}
 
 
-def behind(distance=420.):
+def behind(distance=420., angle=180.):
     """Put the player straight behind the boss (too far for the rear hook), to force a turn in place."""
     w, b, p = fixture.actors()
     if 'Ready' in b.get_editor_property('BossState').export_text() or 'Recovery' in b.get_editor_property('BossState').export_text():
-        f = b.get_actor_forward_vector()
+        yaw = math.radians(b.get_actor_rotation().yaw + angle)
         here = b.get_actor_location()
         z = p.get_actor_location().z
-        spot = unreal.Vector(here.x - f.x * distance, here.y - f.y * distance, z)
+        spot = unreal.Vector(here.x + math.cos(yaw) * distance, here.y + math.sin(yaw) * distance, z)
         hit = unreal.SystemLibrary.line_trace_single(w, unreal.Vector(here.x, here.y, z), spot, unreal.TraceTypeQuery.TRACE_TYPE_QUERY1,
             False, [b, p], unreal.DrawDebugTrace.NONE, True)
         if hit is None: p.set_actor_location(spot, False, False)
@@ -245,15 +245,46 @@ def behind(distance=420.):
     return 1
 
 
-def turn_scenario(seconds=60, every=4.):
+def turn_scenario(seconds=60, every=4., angle=180.):
     m = "__import__('TestBossSprint')"
     steps = [{'action': 'start_pie'}, {'action': 'wait_for_pie', 'timeout_seconds': 30}, {'action': 'wait', 'seconds': 8.},
              {'action': 'python_assert_number', 'expression': f'{m}.begin(300)', 'operator': 'eq', 'expected': 1}]
     for _ in range(int(seconds // every)):
-        steps += [{'action': 'wait', 'seconds': every}, {'action': 'python_assert_number', 'expression': f'{m}.behind()', 'operator': 'eq', 'expected': 1}]
+        steps += [{'action': 'wait', 'seconds': every}, {'action': 'python_assert_number', 'expression': f'{m}.behind(420., {angle})', 'operator': 'eq', 'expected': 1}]
     steps += [{'action': 'python_assert_number', 'expression': f'{m}.finish()', 'operator': 'eq', 'expected': 1}]
     return {'name': 'Boss turning in place', 'dependencies': ['Tools/TestBossSprint.py', 'Tools/TestDonorPunch.py'],
             'steps': steps, 'teardown': {'stop_pie': True}}
+
+
+def turn_poke_scenario(seconds=40, angle=-135.):
+    """Player goes behind the boss every 4s and the boss is hit every 0.25s: does a hit during the turn make it snap round?"""
+    m = "__import__('TestBossSprint')"
+    call = lambda e: {'action': 'python_assert_number', 'expression': f'{m}.{e}', 'operator': 'eq', 'expected': 1}
+    steps = [{'action': 'start_pie'}, {'action': 'wait_for_pie', 'timeout_seconds': 30}, {'action': 'wait', 'seconds': 8.}, call('begin(300)')]
+    for i in range(int(seconds // .25)):
+        steps += [{'action': 'wait', 'seconds': .25}, call('poke()')]
+        if i % 16 == 15: steps += [call(f'behind(420., {angle})')]
+    steps += [call('finish()')]
+    return {'name': 'Boss hit while turning', 'dependencies': ['Tools/TestBossSprint.py', 'Tools/TestDonorPunch.py'],
+            'steps': steps, 'teardown': {'stop_pie': True}}
+
+
+def shot_only():
+    w, b, p = fixture.actors()
+    unreal.SystemLibrary.execute_console_command(w, 'shot showui')
+    for _ in range(4): heal()
+    return 1
+
+
+def panel_scenario():
+    """A few screenshots of the AI overlay during a close fight."""
+    m = "__import__('TestBossSprint')"
+    call = lambda e: {'action': 'python_assert_number', 'expression': f'{m}.{e}', 'operator': 'eq', 'expected': 1}
+    steps = [{'action': 'start_pie'}, {'action': 'wait_for_pie', 'timeout_seconds': 30}, {'action': 'wait', 'seconds': 8.}, call('begin(300)')]
+    for wait in (3.2, 1.3, 1.7, 2.1):
+        steps += [{'action': 'wait', 'seconds': wait}, call('shot_only()')]
+    steps += [{'action': 'wait', 'seconds': 1.5}]
+    return {'name': 'AI overlay screenshots', 'dependencies': ['Tools/TestBossSprint.py', 'Tools/TestDonorPunch.py'], 'steps': steps, 'teardown': {'stop_pie': True}}
 
 
 def poke():

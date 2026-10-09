@@ -30,6 +30,8 @@ public:
     int32 HitsTakenWithin(float Seconds) const;
     /** 전투에서 처음 판단한 시각. 한 번도 안 쓴 공격의 "안 쓴 시간"을 여기서부터 잰다. */
     double FirstDecisionAt = -1.0;
+    /** 마지막 Utility 추첨에서 뽑힌 자리(화면 표시용). 이어 치기로 바뀐 자리와 구분한다. */
+    int32 UtilityWinner = -1;
     /** Lab override: 0=combat, 1=no travel, 2=manual step, 3=right-foot root-motion left punch. */
     int32 MotionLabPunchMode = 0;
     /** Runtime-only fixture permissions. Start override exists only inside a manual lab request. */
@@ -234,6 +236,10 @@ private:
     FString BarNotice;
     double BarNoticeUntil = -1.0;
     TSharedPtr<class SBossHealthBar> HealthBar;
+    /** 처음 보는 사람이 읽는 AI 표시(왼쪽 HFSM·GOAP, 오른쪽 Utility). 콘솔 boss.Panel 0 = 끔, 1 = 이 표시, 2 = 예전 글자 패널. */
+    void UpdateAIPanel();
+    TSharedPtr<class SBossAIPanel> AIPanel;
+    int32 PanelModeApplied = -1;
     float BarTrail = 1.f;
     float BarDamage = 0.f;
     float BarOpacity = 0.f;
