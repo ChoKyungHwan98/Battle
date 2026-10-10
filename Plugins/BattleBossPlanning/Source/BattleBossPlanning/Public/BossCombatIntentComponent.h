@@ -22,6 +22,8 @@ public:
     float FailureMultiplier(int32 Slot) const;
     /** 이번 판단에서 몰아치려 하는가. 판단 번호가 바뀔 때 한 번 정하고, 그 판단의 모든 후보가 같은 답을 본다. */
     bool WantsString(int32 DecisionNumber, bool bPhaseTwo) const;
+    /** 플레이어가 보스 둘레를 도는 빠르기(도/초, 부드럽게 고른 값). 왼쪽으로 돌면 양수. */
+    float CirclingSpeed() const { return CircleSpeed; }
     /** 지금 거리에서 바로 칠 수 있는 공격들의 기본 가중치 합. "칠지 걸을지"를 정할 때 공격 쪽의 점수로 쓴다. */
     float ReachableAttackWeight(float Distance) const;
     /** 화면 표시용: 마지막 "칠지 걸을지" 판단의 점수 한 줄. */
@@ -175,6 +177,17 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Attack Movement") float RecoveryStepSpeed = 130.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Attack Movement") float RecoveryStepSeconds = .55f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Attack Movement") float RecoveryStepDistance = 240.f;
+    // ---- 둘레를 도는 플레이어 ----
+    /** 플레이어가 이보다 빨리(도/초) 보스 둘레를 돌고 있으면 "돌고 있다"고 본다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Circling") float CircleSpeedThreshold = 30.f;
+    /** 돌고 있는 상대에게는 준비 동작 동안 더 많이 따라 돈다(평소 WindupTurnLimit). 옆으로 디디며 돈다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Circling") float WindupTurnLimitCircling = 55.f;
+    /** 돌고 있는 상대에게: 넓게 치는 휩쓸기를 올리고, 방향을 못 바꾸는 달려드는 공격과 돌진은 내린다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Circling") float CircleSweepBoost = 2.5f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Circling") float CircleRunInScale = .6f;
+    /** 돌고 있는 상대가 옆(60도 이상)에 있으면 돌아보는 대신 돌면서 친다: 확률과, 다시 쓸 때까지의 시간에 곱하는 값. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Circling") float CircleRearChance = .9f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Circling") float CircleRearCooldownScale = .45f;
     // ---- 플레이어의 공격에 반응하기 ----
     /** 서 있거나 걷는 중에 플레이어가 공격을 시작하면 이 확률로 상체를 젖히며 빠진다(후딜 중에는 하지 않는다). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Reaction") float ReactChance = .5f;
@@ -249,6 +262,10 @@ private:
     bool bSwayBack = false;          // 지금 기동이 "숙이며 빠지기"인가
     bool StartSwayBack(const FString& Reason, const TCHAR* Event);
     void UpdateAttackMovement(float DeltaTime);
+    void UpdateCircling(float DeltaTime);
+    float CircleSpeed = 0.f;
+    float LastBearing = 0.f;
+    bool bBearingValid = false;
     void UpdateReaction();
     bool bAttackStepping = false;    // 지금 공격 상태 안에서 걷는 중인가(다리는 걷는 동작, 상체는 공격 동작)
     bool bAttackStepLogged = false;

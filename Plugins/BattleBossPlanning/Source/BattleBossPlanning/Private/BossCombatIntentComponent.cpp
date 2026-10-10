@@ -890,6 +890,30 @@ FAutoConsoleVariableRef CVarFakeSwing(TEXT("boss.FakeSwing"), FakeSwing, TEXT("C
 int32 FakeSwingSeen = 0;
 }
 
+// ---- 둘레를 도는 플레이어 ---------------------------------------------------------------------------------------------
+// 실제 플레이 기록(140초): 플레이어가 보스 둘레를 계속 돌자 제자리 턴 18번, 옆·뒤로 후딜 끊김 11번, 준비 중 방향 고정 18번.
+// 보스는 돌아보는 데 시간을 다 썼고, 다 돌았을 때 플레이어는 또 옆에 있었다. 공격 32번 중 8번만 닿았다.
+// 도는 빠르기를 재고(플레이어가 보스에게서 보이는 방향이 초당 몇 도 바뀌는가), 돌고 있으면:
+//   준비 동작 동안 더 많이 따라 돌고, 넓게 치는 휩쓸기를 올리고, 방향을 못 바꾸는 달려드는 공격을 내리고,
+//   옆에 있을 때 돌아보는 대신 돌면서 친다.
+void UBossCombatIntentComponent::UpdateCircling(float DeltaTime)
+{
+    const AActor* Boss = GetOwner();
+    const AActor* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+    if (!IsValid(Boss) || !IsValid(Player) || DeltaTime <= 0.f) { bBearingValid = false; return; }
+    const FVector To = Player->GetActorLocation() - Boss->GetActorLocation();
+    if (To.SizeSquared2D() < 100.f) return;
+    const float Bearing = To.Rotation().Yaw;
+    if (bBearingValid)
+    {
+        // 회피나 순간 이동의 튀는 값은 잘라낸다. 약 0.4초에 걸쳐 고른다.
+        const float Raw = FMath::Clamp(FMath::FindDeltaAngleDegrees(LastBearing, Bearing) / DeltaTime, -220.f, 220.f);
+        CircleSpeed = FMath::FInterpTo(CircleSpeed, Raw, DeltaTime, 2.5f);
+    }
+    LastBearing = Bearing;
+    bBearingValid = true;
+}
+
 // ---- 플레이어의 공격에 반응하기 ----------------------------------------------------------------------------------------
 // 보스의 판단은 후딜이 끝날 때만 일어났다. 그 사이 플레이어가 무엇을 해도 보스는 반응하지 않아서, "내가 한 것에 반응했다"는 순간이 없었다.
 // 서 있거나 걷는 중에 플레이어가 공격을 시작하면, 가끔 상체를 젖히며 뒤로 빠진다. 빠진 자리에서 평소처럼 고르므로 대개 맞받아치게 된다.
@@ -961,6 +985,10 @@ void UBossCombatIntentComponent::UpdateAttackMovement(float DeltaTime)
         {
             if (Distance > AttackStepFar) Want = Toward;
             else if (Distance < AttackStepNear) Want = -Toward;
+            // 플레이어가 비껴 있으면 그쪽으로 옆걸음을 섞는다: 몸이 따라 도는 동안 발도 디딘다.
+            const float Off = FMath::FindDeltaAngleDegrees(Boss->GetActorRotation().Yaw, To.Rotation().Yaw);
+            if (FMath::Abs(Off) > 12.f)
+                Want = (Want + Toward.RotateAngleAxis(Off > 0.f ? 90.f : -90.f, FVector::UpVector) * .7f).GetSafeNormal2D();
             Speed = AttackStepSpeed;
         }
     }
@@ -1131,9 +1159,9 @@ float SprintPlayRate(float Speed, float NaturalSpeed)
 }
 
 // 0 = 대응 없음, 1 = 훅, 2 = 휩쓸기. Roll과 Pick은 0..1 난수.
-int32 ChooseRearResponse(float Dot, float Distance, float Roll, float Pick, float Chance)
+int32 ChooseRearResponse(float Dot, float Distance, float Roll, float Pick, float Chance, float BehindDot = RearBehindDot)
 {
-    if (!FMath::IsFinite(Dot) || !FMath::IsFinite(Distance) || Dot > RearBehindDot || Distance > RearSweepMaxDistance) return 0;
+    if (!FMath::IsFinite(Dot) || !FMath::IsFinite(Distance) || Dot > BehindDot || Distance > RearSweepMaxDistance) return 0;
     if (Roll < 0.f || Roll >= FMath::Clamp(Chance, 0.f, 1.f)) return 0;
     return Distance <= RearHookMaxDistance && Pick < .5f ? 1 : 2;
 }
@@ -1292,8 +1320,10 @@ void UBossCombatIntentComponent::TryRearResponse()
     if (!IsValid(Player)) Player = UGameplayStatics::GetPlayerPawn(this, 0);
     if (!IsValid(Player) || Number(Player, TEXT("CurrentHealth"), 1) <= 0 || Flag(Player, TEXT("bKnockedDown"))) return;
     const FVector Delta = Player->GetActorLocation() - Boss->GetActorLocation();
+    // 둘레를 도는 상대에게는 옆(60도 이상)에 있을 때부터, 더 자주 돌면서 친다. 제자리에서 돌아보기만 하면 다 돌았을 때 또 옆에 있다.
+    const bool bCircling = FMath::Abs(CircleSpeed) >= CircleSpeedThreshold;
     const int32 Choice = ChooseRearResponse(FVector::DotProduct(Boss->GetActorForwardVector(), Delta.GetSafeNormal2D()),
-        Delta.Size2D(), FMath::FRand(), FMath::FRand(), RearResponseChance);
+        Delta.Size2D(), FMath::FRand(), FMath::FRand(), bCircling ? CircleRearChance : RearResponseChance, bCircling ? .5f : RearBehindDot);
     if (Choice == 0) return;
     // 훅은 왼손 자리(ActionId 0)로 요청하고 카드만 훅으로 바꾼다. 휩쓸기는 제 자리(ActionId 3)로 요청한다.
     const int32 WantedId = Choice == 1 ? 0 : 3;
@@ -1320,7 +1350,7 @@ void UBossCombatIntentComponent::TryRearResponse()
     RearCard = nullptr;
     if (!Flag(Boss, TEXT("bActionStartAllowed"))) return;
     bRearResponseActive = true;
-    RearResponseReadyAt = Now + RearResponseCooldown;
+    RearResponseReadyAt = Now + RearResponseCooldown * (bCircling ? CircleRearCooldownScale : 1.f);
     // 타격 직전에 정면이 되도록 고르게 돈다. 빨리 돌아놓고 서 있는 것보다 "돌아서며 휘두르는" 동작으로 읽힌다.
     const float Angle = FMath::Abs(FMath::FindDeltaAngleDegrees(Boss->GetActorRotation().Yaw, Delta.Rotation().Yaw));
     RearTurnRate = RearTurnSpeedFor(Angle, FirstImpactSeconds(Object(Boss, TEXT("ActiveAction"))), RearResponseTurnSpeed);
@@ -1823,7 +1853,9 @@ void UBossCombatIntentComponent::UpdateWindupTurn()
     { bWindupTracked = false; return; }
     const float Yaw = Boss->GetActorRotation().Yaw;
     if (!bWindupTracked) { bWindupTracked = true; WindupStartYaw = Yaw; return; }
-    if (FMath::Abs(FMath::FindDeltaAngleDegrees(WindupStartYaw, Yaw)) >= WindupTurnLimit && Flag(Boss, TEXT("bCanTurn")))
+    // 둘레를 도는 상대에게는 더 많이 따라 돈다(그동안 옆으로 디딘다: UpdateAttackMovement).
+    const float Limit = FMath::Abs(CircleSpeed) >= CircleSpeedThreshold ? FMath::Max(WindupTurnLimit, WindupTurnLimitCircling) : WindupTurnLimit;
+    if (FMath::Abs(FMath::FindDeltaAngleDegrees(WindupStartYaw, Yaw)) >= Limit && Flag(Boss, TEXT("bCanTurn")))
     {
         SetFlag(Boss, TEXT("bCanTurn"), false);
         Invoke(Boss, TEXT("RecordCombatQA"), TEXT("windup_turn_locked"));
@@ -2295,6 +2327,7 @@ void UBossCombatIntentComponent::TickComponent(float DeltaTime, ELevelTick TickT
     UpdateCombatEffects();
     UpdateComboStages();
     UpdateTravelScale();
+    UpdateCircling(DeltaTime);
     UpdateWhiff();
     UpdateAttackMovement(DeltaTime);
     UpdateReaction();
@@ -2542,6 +2575,12 @@ float UBossCombatIntentLibrary::AdjustIntentCandidate(AActor* Boss, int32 Candid
     {
         Score *= PressureBoost(ActionId, Intent->HitsTakenWithin(4.f), static_cast<float>(Distance));
         Score *= Intent->FailureMultiplier(CandidateSlot);
+        // 둘레를 도는 상대: 넓게 치는 휩쓸기를 올리고, 방향을 못 바꾸는 달려드는 공격과 돌진을 내린다.
+        if (FMath::Abs(Intent->CirclingSpeed()) >= Intent->CircleSpeedThreshold)
+        {
+            if (ActionId == 3) Score *= Intent->CircleSweepBoost;
+            else if (ActionId == 6 || IsMidPattern(ActionId, CardMin)) Score *= Intent->CircleRunInScale;
+        }
         // 몰아치려는 판단이면 여는 공격(왼손·오른손, 제자리든 달려들든)을 올린다.
         if ((ActionId == 0 || ActionId == 1) && Intent->WantsString(static_cast<int32>(Number(Boss, TEXT("UtilityDecisionCount"))), Flag(Boss, TEXT("bPhaseTwo"))))
             Score *= Intent->StringOpenerBoost;
@@ -3587,6 +3626,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossRearResponseTest,"Battle.Boss.RearResponse
 bool FBossRearResponseTest::RunTest(const FString& Parameters)
 {
     TestEqual(TEXT("Player in front: no rear response"), ChooseRearResponse(.9f, 200.f, 0.f, 0.f, 1.f), 0);
+    TestEqual(TEXT("Player at the side, not circling: the turn as before"), ChooseRearResponse(.3f, 200.f, 0.f, .2f, 1.f), 0);
+    TestEqual(TEXT("Player at the side and circling: pivot and hit"), ChooseRearResponse(.3f, 200.f, 0.f, .2f, 1.f, .5f), 1);
     TestEqual(TEXT("Behind and close: hook or sweep"), ChooseRearResponse(-.8f, 200.f, 0.f, .2f, 1.f), 1);
     TestEqual(TEXT("Behind and close, other pick: sweep"), ChooseRearResponse(-.8f, 200.f, 0.f, .8f, 1.f), 2);
     TestEqual(TEXT("Behind but past the hook's reach: sweep only"), ChooseRearResponse(-.8f, 300.f, 0.f, .2f, 1.f), 2);

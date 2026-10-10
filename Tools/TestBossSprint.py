@@ -216,6 +216,40 @@ def retreat_end():
     return 1
 
 
+def orbit_begin(radius=260., speed=.75):
+    """A player who keeps circling the boss at about `radius` cm (real movement). Kept alive."""
+    global RETREAT
+    state = {'n': 0}
+
+    def step(_):
+        try:
+            w, b, p = fixture.actors()
+        except Exception:
+            return
+        here, boss = p.get_actor_location(), b.get_actor_location()
+        dx, dy = here.x - boss.x, here.y - boss.y
+        d = math.hypot(dx, dy)
+        state['n'] += 1
+        if state['n'] % 30 == 0:
+            for _ in range(4): heal()
+        if d < 1.: return
+        ux, uy = dx / d, dy / d
+        pull = max(-1., min(1., (radius - d) / 120.))          # hold the radius
+        mx, my = -uy + ux * pull, ux + uy * pull
+        n = math.hypot(mx, my) or 1.
+        p.add_movement_input(unreal.Vector(mx / n, my / n, 0.), speed, False)
+    RETREAT = unreal.register_slate_post_tick_callback(step)
+    return 1
+
+
+def orbit_scenario(seconds=90, radius=260):
+    m = "__import__('TestBossSprint')"
+    call = lambda e: {'action': 'python_assert_number', 'expression': f'{m}.{e}', 'operator': 'eq', 'expected': 1}
+    steps = [{'action': 'start_pie'}, {'action': 'wait_for_pie', 'timeout_seconds': 30}, {'action': 'wait', 'seconds': 8.},
+             call('begin(300)'), call(f'orbit_begin({radius})'), {'action': 'wait', 'seconds': seconds}, call('retreat_end()'), call('finish()')]
+    return {'name': 'Boss against a circling player', 'dependencies': ['Tools/TestBossSprint.py', 'Tools/TestDonorPunch.py'], 'steps': steps, 'teardown': {'stop_pie': True}}
+
+
 def console(command):
     w, b, p = fixture.actors()
     unreal.SystemLibrary.execute_console_command(w, command)
