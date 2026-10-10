@@ -57,6 +57,16 @@ int32 SBossAIPanel::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeo
         Box(Origin, FVector2f(3.f, Height), State, 1);
         FVector2f At = Origin + FVector2f(Pad, Pad);
         Text(FText::FromString(TEXT("HFSM")), HeadFont, At, State);
+        if (Heat >= 0.f)
+        {
+            // 2페이즈: 열 게이지. 가득 차면 몰아치기가 끝난 뒤 지쳐서 멈춘다.
+            const float GaugeWidth = Inner * .34f, GaugeX = At.X + Inner - GaugeWidth;
+            const FText Label = FText::FromString(TEXT("과열"));
+            const FVector2f LabelSize = Measure->Measure(Label, HeadFont);
+            Text(Label, HeadFont, FVector2f(GaugeX - LabelSize.X - 8.f, At.Y), Strike);
+            Box(FVector2f(GaugeX, At.Y + Small * .35f), FVector2f(GaugeWidth, Small * .8f), FLinearColor(1.f, 1.f, 1.f, .1f), 1);
+            Box(FVector2f(GaugeX, At.Y + Small * .35f), FVector2f(GaugeWidth * FMath::Clamp(Heat, 0.f, 1.f), Small * .8f), Strike, 2);
+        }
         At.Y += Small * 1.9f;
         // 단계 여섯 칸. 지금 칸만 채운다. 타격은 붉게, 닫힌 후딜(플레이어의 반격 시간)은 가장 밝게.
         static const TCHAR* Names[] = {TEXT("선택"), TEXT("이동"), TEXT("준비"), TEXT("타격"), TEXT("후딜 닫힘"), TEXT("후딜 열림")};
@@ -95,7 +105,7 @@ int32 SBossAIPanel::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeo
     {
         const int32 Rows = FMath::Min(Scores.Num(), 6);
         const float Width = Screen.X * .255f, Inner = Width - Pad * 2.f;
-        const float Height = Pad * 2.f + Small * 1.6f + Line * 1.15f + FMath::Max(1, Rows) * Line;
+        const float Height = Pad * 2.f + Small * 1.6f + Line * 1.15f + FMath::Max(1, Rows) * Line + (MoveLine.IsEmpty() ? 0.f : Line * 1.1f);
         const FVector2f Origin(Screen.X * .98f - Width, Screen.Y * .05f);
         Box(Origin, FVector2f(Width, Height), Back, 0);
         Box(Origin + FVector2f(Width - 3.f, 0.f), FVector2f(3.f, Height), Utility, 1);
@@ -120,7 +130,9 @@ int32 SBossAIPanel::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeo
             Text(Number, BodyFont, FVector2f(At.X + Inner - NumberSize.X, At.Y), Row.bPicked ? Ink : Dim);
             At.Y += Line;
         }
-        if (Rows == 0) Text(FText::FromString(TEXT("아직 고르지 않았다")), BodyFont, At, Dim);
+        if (Rows == 0) { Text(FText::FromString(TEXT("아직 고르지 않았다")), BodyFont, At, Dim); At.Y += Line; }
+        // 공격 뒤 "칠지 걸을지"의 점수 한 줄.
+        if (!MoveLine.IsEmpty()) Text(Fit(MoveLine, HeadFont, Inner), HeadFont, At + FVector2f(0.f, Line * .2f), Dim);
     }
     return LayerId + 3;
 }

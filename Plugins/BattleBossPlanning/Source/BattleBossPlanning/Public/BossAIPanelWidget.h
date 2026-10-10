@@ -26,6 +26,8 @@ public:
     int32 StringWanted = 1;      // 치려는 공격 수
     FText StringText;            // 친 공격들의 이름
     FText Plan;                  // GOAP의 지금 계획
+    FText MoveLine;              // 마지막 "칠지 걸을지" 판단의 점수
+    float Heat = -1.f;           // 2페이즈의 열(0..1). 음수면 표시하지 않는다
     FText Distance;              // 거리와 예상 거리
     TArray<FScore> Scores;       // 점수가 높은 순서
     float Opacity = 0.f;

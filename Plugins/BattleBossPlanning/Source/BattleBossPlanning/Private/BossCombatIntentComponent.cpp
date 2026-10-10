@@ -26,6 +26,9 @@
 #include "GameFramework/PlayerController.h"
 #include "Camera/CameraShakeBase.h"
 #include "BossAIPanelWidget.h"
+#include "Components/DecalComponent.h"
+#include "Components/PointLightComponent.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include <limits>
 
 namespace
@@ -48,27 +51,14 @@ constexpr double MaxRunInReach = 650.0;         // 달려들며 치는 공격을
 // 3분의 2가 헛스윙과 그 후딜이었다. 뒤로 걷는 플레이어는 보스가 칠 때쯤 그 자리에 없다.
 // 이제 "칠 때쯤의 거리"로 판단한다: 지금 거리 + 멀어지는 속도 x 타격까지의 시간. 플레이어가 그 속도로 끝까지 가지는 않으므로
 // 70%만 믿고, 220cm까지만 보정한다(회피 한 번의 순간 속도로 예측이 튀지 않게).
-// 전후 비교용 콘솔 변수: boss.LeadTrust 0 이면 예측을 끄고, boss.OutcomeMemory 0 이면 결과의 기억을 끈다.
+// 전후 비교용 콘솔 변수: boss.LeadTrust 0 이면 예측을 끈다.
 float LeadTrust = .7f;
 FAutoConsoleVariableRef CVarLeadTrust(TEXT("boss.LeadTrust"), LeadTrust, TEXT("How much of the player's current speed the boss trusts when aiming (0 = no prediction)."));
-int32 OutcomeMemory = 1;
-FAutoConsoleVariableRef CVarOutcomeMemory(TEXT("boss.OutcomeMemory"), OutcomeMemory, TEXT("0 = attacks do not remember whether they hit or missed."));
 constexpr float MaxLead = 220.f;
 float PredictedDistance(float Distance, float SpeedAway, float Seconds)
 {
     if (!FMath::IsFinite(Distance) || !FMath::IsFinite(SpeedAway) || !FMath::IsFinite(Seconds)) return Distance;
     return FMath::Max(0.f, Distance + FMath::Clamp(SpeedAway * FMath::Max(0.f, Seconds) * LeadTrust, -MaxLead, MaxLead));
-}
-
-// ---- 결과의 기억 ---------------------------------------------------------------------------------------------------
-// 헛친 공격을 같은 상황에서 또 고르면 "헛침 -> 추격 -> 헛침"이 반복된다. 공격마다 최근 결과를 기억한다.
-// 한 번 헛치면 0.7배, 연달아 두 번 이상이면 0.45배에서 시작해 20초에 걸쳐 돌아온다. 맞히면 1.25배에서 10초에 걸쳐 돌아온다.
-// 막힌 것은 닿기는 한 것이라 헛침을 지우기만 한다. 달려오기에는 기억이 없어서, 공격이 계속 헛치면 거리를 좁히는 쪽이 올라온다.
-float OutcomeScale(int32 Whiffs, bool bHit, float SecondsSince)
-{
-    if (!OutcomeMemory || !FMath::IsFinite(SecondsSince) || SecondsSince < 0.f) return 1.f;
-    if (Whiffs > 0) return FMath::Lerp(Whiffs >= 2 ? .45f : .7f, 1.f, FMath::Clamp(SecondsSince / 20.f, 0.f, 1.f));
-    return bHit ? FMath::Lerp(1.25f, 1.f, FMath::Clamp(SecondsSince / 10.f, 0.f, 1.f)) : 1.f;
 }
 
 // 단거리 버전이 제자리에서 닿는 가장 먼 거리(직접 잰 값). 연속기는 마지막 훅까지 닿는 거리다.
@@ -648,6 +638,8 @@ void UBossCombatIntentComponent::RecordAttackRecoveryEnd()
     if (bPursuit) ChainDepth = Depth + 1;      // 추격 뒤의 공격도 몰아치기의 일부로 센다
     // 몰아치기가 끝났다: 긴 후딜을 다 보낸 뒤에도 뒤쪽 대응으로 덮지 않는다. 다 피한 플레이어의 차례다.
     const bool bStringEnded = Depth >= 1 && !bPursuit;
+    // 과열: 열이 가득 찬 채로 공격이 끝났으면 지쳐서 멈춘다(다음 행동을 고르지 않는다).
+    if (Heat >= 1.f && !bPursuit && TryVent()) return;
     if (!bStringEnded) TryRearResponse();
     if (TryFacingStep()) return;
     if (!bPursuit) TryFootwork();      // 쫓는 중에는 발놀림으로 쉬지 않는다
@@ -659,10 +651,18 @@ namespace
 // 실전 기록: 플레이어가 붙어 있으면 보스는 표본의 99%에서 서 있었다. 후딜이 끝나는 프레임에 다음 공격을 골랐기 때문이다.
 // "언제 발을 옮기나"는 아래 확률이, "무엇을 노리나"는 의도 추첨이, "어떤 걸음을 어떤 순서로"는 GOAP(PlanFootwork)가 정한다.
 // 걸음은 고정된 지점으로 가지 않는다. 매 프레임 플레이어의 지금 위치를 기준으로 방향을 다시 잡아서, 움직이는 플레이어를 따라 돈다.
-float FootworkChance(int32 Streak, bool bCrowded, bool bPhaseTwo, float PhaseTwoScale)
+// "칠지 걸을지"의 걷는 쪽 점수. Out[0] 둘레를 걷는다, Out[1] 걸어 들어간다, Out[2] 빠진다.
+//   둘레 걷기: 주먹 거리 안에서. 발을 옮기지 않고 연달아 칠수록 오른다(두 번째부터 +60%씩).
+//   걸어 들어가기: 주먹 거리 밖, 달려갈 만큼 멀지는 않을 때.
+//   빠지기: 붙어 있을 때. 최근에 맞은 횟수만큼 오른다.
+// 2페이즈는 덜 걷고 더 친다(전체에 PhaseTwoScale을 곱한다).
+void MovementScores(float Distance, int32 Streak, int32 HitsTaken, bool bPhaseTwo, float Crowd, float Pocket, float MaxDistance,
+    float CircleBase, float PressBase, float SpaceBase, float PhaseTwoScale, float Out[3])
 {
-    const float Base = Streak <= 1 ? .25f : (Streak == 2 ? .55f : .85f);
-    return FMath::Clamp((Base + (bCrowded ? .2f : 0.f)) * (bPhaseTwo ? PhaseTwoScale : 1.f), 0.f, .9f);
+    const float Scale = bPhaseTwo ? PhaseTwoScale : 1.f;
+    Out[0] = Distance <= Pocket ? CircleBase * (1.f + .6f * FMath::Max(0, Streak - 1)) * Scale : 0.f;
+    Out[1] = Distance > Pocket && Distance <= MaxDistance ? PressBase * Scale : 0.f;
+    Out[2] = Distance < Crowd ? SpaceBase * (1.f + FMath::Max(0, HitsTaken)) * Scale : 0.f;
 }
 
 // 기동을 할 수 있는 상황인가: 플레이어가 앞에 있고, 달려가야 할 만큼 멀지 않고, 가드를 깨야 할 때가 아니다.
@@ -681,16 +681,8 @@ void FootworkSideCosts(float PlayerSpeedToBossRight, float Coin, float& LeftCost
     else (Coin < .5f ? LeftCost : RightCost) = .2f;
 }
 
-// 이번 기동이 노리는 것. 거리대마다 고를 수 있는 의도가 다르다.
+// 이번 기동이 노리는 것: 간격을 만든다 / 각을 바꾼다 / 주먹 거리로 들어간다. 여럿을 함께 노릴 수 있다.
 struct FFootworkWants { bool bSpace = false, bAngle = false, bPocket = false; };
-FFootworkWants ChooseFootworkWants(float Distance, float Crowd, float Pocket, float Roll)
-{
-    FFootworkWants W;
-    if (Distance < Crowd) { W.bSpace = true; W.bAngle = Roll >= .35f; }      // 붙어 있다: 빠지기 35 / 빠지며 각 바꾸기 65
-    else if (Distance <= Pocket) W.bAngle = true;                             // 주먹 거리: 각 바꾸기
-    else { W.bPocket = true; W.bAngle = Roll >= .6f; }                        // 주먹 거리 밖: 걸어 들어가기 60 / 돌면서 들어가기 40
-    return W;
-}
 
 // 걸음 한 번이 끝났는가. Progress: 뒤로·걸어 들어가기는 지금 간격, 돌기는 돈 각도.
 bool FootworkLegDone(EBossPositionAction Leg, float Distance, float Swept, float SweepTarget, float Comfort, float PressStop, float Seconds)
@@ -760,7 +752,7 @@ bool UBossCombatIntentComponent::TryFacingStep()
     return true;
 }
 
-namespace { float BowKick(float PeakDegrees); }
+namespace { float BowKick(float PeakDegrees); int32 WeightedPick(const TArray<double>& Weights, double Roll); }
 
 // 후딜이 끝난 순간, 다음 공격을 고르기 전에 발을 옮길지 정한다. 옮긴다면 Position 상태로 들어가 계획한 걸음들을 차례로 하고,
 // 끝나면 Ready로 돌아가 그 자리에서 Utility가 새로 고른다.
@@ -809,9 +801,17 @@ void UBossCombatIntentComponent::TryFootwork()
             return;
         }
     }
-    const float Chance = Distance > PocketDistance ? PressChance
-        : FootworkChance(AttackStreak, bCrowded, Flag(Boss, TEXT("bPhaseTwo")), PhaseTwoFootworkScale);
-    if (FMath::FRand() >= Chance) return;
+    // 칠지 걸을지: 지금 칠 수 있는 공격들의 가중치 합과 세 가지 걸음의 점수를 한 표에 놓고 뽑는다(Utility AI의 첫 판단).
+    // 공격이 뽑히면 여기서는 아무것도 하지 않고, 어느 공격인지는 바로 이어지는 평소의 추첨이 정한다.
+    float Move[3];
+    MovementScores(Distance, AttackStreak, HitsTakenWithin(2.f), Flag(Boss, TEXT("bPhaseTwo")), CrowdDistance, PocketDistance, FootworkMaxDistance,
+        CircleScore, PressScore, SpaceScore, PhaseTwoFootworkScale, Move);
+    const float AttackTotal = ReachableAttackWeight(Distance);
+    const int32 Pick = WeightedPick({static_cast<double>(AttackTotal), static_cast<double>(Move[0]), static_cast<double>(Move[1]), static_cast<double>(Move[2])}, FMath::FRand());
+    static const TCHAR* PickNames[] = {TEXT("친다"), TEXT("둘레를 걷는다"), TEXT("걸어 들어간다"), TEXT("빠진다")};
+    MoveLine = FString::Printf(TEXT("공격 %.0f · 둘레 %.0f · 조이기 %.0f · 빠지기 %.0f  →  %s"), AttackTotal, Move[0], Move[1], Move[2],
+        PickNames[FMath::Clamp(Pick, 0, 3)]);
+    if (Pick <= 0) return;
 
     // 어느 쪽이 열려 있는지 바닥을 따라 확인한다. 계획은 "열려 있다"고 확인된 걸음만 쓴다.
     const FVector BossFloor = BossLocation - FVector(0, 0, Boss->GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
@@ -821,7 +821,10 @@ void UBossCombatIntentComponent::TryFootwork()
     const bool bLeftOpen = NavOpen(this, BossFloor, BossFloor + LeftDir * 150.f);
     const bool bRightOpen = NavOpen(this, BossFloor, BossFloor - LeftDir * 150.f);
     const bool bForwardOpen = NavOpen(this, BossFloor, BossFloor - Away * 100.f);
-    const FFootworkWants Wants = ChooseFootworkWants(Distance, CrowdDistance, PocketDistance, FMath::FRand());
+    FFootworkWants Wants;
+    Wants.bAngle = Pick == 1 || (Pick == 2 && FMath::FRand() >= .6f);      // 둘레 걷기, 또는 돌면서 들어가기(40%)
+    Wants.bSpace = Pick == 3 || (Pick == 1 && bCrowded);                   // 빠지기, 또는 붙어 있을 때의 둘레 걷기(빠지며 돈다)
+    Wants.bPocket = Pick == 2;
     float LeftCost, RightCost;
     FootworkSideCosts(FVector::DotProduct(Player->GetVelocity(), Boss->GetActorRightVector()), FMath::FRand(), LeftCost, RightCost);
     const auto Plan = UBossPositionPlanner::PlanFootwork(Distance, Dot, CrowdDistance, PocketDistance, .5f,
@@ -1251,6 +1254,11 @@ void UBossCombatIntentComponent::UpdateSprint()
         SetNumber(Boss, TEXT("ApproachRunSpeed"), ApproachSprintSpeed);
         // 블루프린트는 왼손·오른손을 이 거리(예전 500)까지만 후보로 본다. 중거리 끝에 맞춘다.
         SetNumber(Boss, TEXT("IntentSelectionMaxDistance"), MaxRunInReach);
+        // 점프 내려찍기: 떨어질 자리를 더 일찍 정하고(1.55초 -> 1.0초) 직격 원을 줄여서(400 -> 320cm) 걸어서 나갈 시간을 준다.
+        // 타격은 2.4초에 오므로 자리가 정해진 뒤 1.4초가 남는다. 충격파는 700cm까지.
+        SetNumber(Boss, TEXT("SlamTrackUntilSeconds"), 1.0);
+        SetNumber(Boss, TEXT("SlamDirectRadius"), 320.0);
+        SetNumber(Boss, TEXT("SlamShockRadius"), 700.0);
         // 감점은 AdjustIntentCandidate가 "가장 큰 것 하나"로 다시 계산한다. 블루프린트가 곱하던 세 배수는 1로 둔다.
         SetNumber(Boss, TEXT("UtilityRepeatMultiplier"), 1.0);
         SetNumber(Boss, TEXT("RecentUseMinMultiplier"), 1.0);
@@ -1726,10 +1734,11 @@ void UBossCombatIntentComponent::UpdateWhiff()
             StringUsed.Reset();
             const bool bPhaseTwo = Flag(Boss, TEXT("bPhaseTwo"));
             const bool bLab = GetWorld() && GetWorld()->GetMapName().Contains(TEXT("Lvl_BossMotionLab"));
-            StringHitsWanted = bLab ? 1 : ChooseStringLength(Id, FMath::FRand(), StringTwoShare,
+            StringHitsWanted = bLab ? 1 : ChooseStringLength(Id, FMath::FRand(), bPhaseTwo ? PhaseTwoStringTwoShare : StringTwoShare,
                 (bPhaseTwo ? PhaseTwoStringThreeShare : StringThreeShare) + (Dodges >= 2.0 ? DodgeStringBonus : 0.f));
         }
         StringUsed.Add(Id);
+        if (Flag(Boss, TEXT("bPhaseTwo")) && Id != 8) Heat = FMath::Min(1.2f, Heat + HeatPerAttack);      // 과열: 칠 때마다 열이 쌓인다
     }
     if (Dodges > DodgeCountSeen + .5 && (bAttacking || StateIs(Boss, TEXT("Boss.Combat.Attack.Recovery")))) bDodgedThisAttack = true;
     DodgeCountSeen = Dodges;
@@ -1944,11 +1953,18 @@ bool UBossCombatIntentComponent::UpdatePerformance(float DeltaTime)
         const bool bStill = StateIs(Boss, TEXT("Boss.Combat.Position"));
         if (bStill && bAlive && IsValid(Player) && Now < PerformUntil)
         {
+            // 도발과 웃기는 플레이어를 보며 한다. 지쳐서 멈춘 동안에는 돌지 않는다.
             const FRotator Wanted(0.f, (Player->GetActorLocation() - Boss->GetActorLocation()).Rotation().Yaw, 0.f);
-            Boss->SetActorRotation(FMath::RInterpConstantTo(Boss->GetActorRotation(), Wanted, DeltaTime, TurnSpeed));
+            if (!bVenting) Boss->SetActorRotation(FMath::RInterpConstantTo(Boss->GetActorRotation(), Wanted, DeltaTime, TurnSpeed));
             return true;
         }
         bPerforming = false;
+        if (bVenting)
+        {
+            bVenting = false;
+            Heat = 0.f;
+            if (VentFX) { VentFX->DestroyComponent(); VentFX = nullptr; }
+        }
         if (PerformMontage && Anim->Montage_IsPlaying(PerformMontage)) Anim->Montage_Stop(.25f, PerformMontage);
         PerformMontage = nullptr;
         SetFlag(Boss, TEXT("bAttackIntentActive"), false);
@@ -2077,16 +2093,6 @@ void UBossCombatIntentComponent::UpdateRecoveryTurn(float DeltaTime)
         // 헛침: 닿지 않았으면 상체가 앞으로 쏠렸다 돌아오고 몸이 조금 딸려 나간다. 맞혔을 때의 후딜과 달라 보인다.
         const AActor* Dodger = UGameplayStatics::GetPlayerPawn(this, 0);
         bWhiffed = !bLab && !bAttackConnected && IsValid(Dodger) && Number(Dodger, TEXT("CurrentHealth"), 1) > 0 && !Flag(Dodger, TEXT("bKnockedDown"));
-        if (!bLab)
-        {
-            // 결과의 기억: 이 자리(슬롯)의 공격이 이번에 어떻게 됐는지 적어 둔다.
-            FAttackOutcome& Outcome = OutcomeBySlot.FindOrAdd(static_cast<int32>(Number(Boss, TEXT("SelectedSlot"), -1)));
-            // 회피로 피한 것은 그 공격의 잘못이 아니다(플레이어가 잘한 것). 회피 없이 빗나간 것만 "안 통했다"로 센다.
-            if (bWhiffed && bDodgedThisAttack) { /* 기록을 바꾸지 않는다 */ }
-            else Outcome.Whiffs = bWhiffed ? Outcome.Whiffs + 1 : 0;
-            Outcome.bHit = bAttackHit;
-            Outcome.At = Now;
-        }
         bRecoveryOpen = false;
         bStringEndLogged = false;
         if (bWhiffed)
@@ -2097,7 +2103,7 @@ void UBossCombatIntentComponent::UpdateRecoveryTurn(float DeltaTime)
         }
         // 후딜 줄이기: 남은 후딜 시간과 그동안의 동작을 같은 비율로 줄인다(동작이 잘리지 않고 빨리 끝난다).
         const float Left = UKismetSystemLibrary::K2_GetTimerRemainingTime(Boss, TEXT("FinishCombatAction"));
-        const float Scale = RecoveryScaleFor(bLab ? 0 : ChainDepth, RecoveryScale, EnderRecoveryScale);
+        const float Scale = RecoveryScaleFor(bLab ? 0 : ChainDepth, bPhaseTwo ? PhaseTwoRecoveryScale : RecoveryScale, EnderRecoveryScale);
         if (Left > 0.f && Scale < 1.f)
         {
             UKismetSystemLibrary::K2_SetTimer(Boss, TEXT("FinishCombatAction"), Left * Scale, false);
@@ -2143,7 +2149,8 @@ void UBossCombatIntentComponent::UpdateRecoveryTurn(float DeltaTime)
     // 옆·뒤를 잡혔으면 후딜을 끝까지 서 있지 않는다. 앞쪽(FlankExitFraction)은 반격 시간으로 지키고, 그 뒤에는
     // 후딜을 일찍 끝내서 제대로 된 턴 동작이나 뒤쪽 대응으로 넘어간다. 발을 둔 채 몸만 돌리는 일은 하지 않는다.
     // 몰아치기의 마지막 공격은 옆·뒤를 잡혀도 후딜을 끝까지 보낸다. 보스를 지나쳐 피한 플레이어가 보상을 잃지 않게 한다.
-    const bool bEnder = ChainDepth >= 1 && ChainSlot == INDEX_NONE;
+    const bool bEnder = (ChainDepth >= 1 && ChainSlot == INDEX_NONE)
+        || static_cast<int32>(Number(Object(Boss, TEXT("ActiveAction")), TEXT("ActionId"), -1)) == 8;      // 점프 내려찍기의 착지도 끝까지 서 있는다
     if (bEnder && !bStringEndLogged) { bStringEndLogged = true; Invoke(Boss, TEXT("RecordCombatQA"), TEXT("string_end")); }
     if (!bFlankExitDone && !bEnder && RecoveryMayTurn(Elapsed, Remaining, FlankExitFraction)
         && FMath::Abs(FMath::FindDeltaAngleDegrees(Boss->GetActorRotation().Yaw, Wanted.Yaw)) >= FlankExitAngle)
@@ -2155,8 +2162,6 @@ void UBossCombatIntentComponent::UpdateRecoveryTurn(float DeltaTime)
         Invoke(Boss, TEXT("FinishCombatAction"));
         return;
     }
-    if (RecoveryTurnSpeed <= 0.f || !RecoveryMayTurn(Elapsed, Remaining, RecoveryTurnStart)) return;
-    Boss->SetActorRotation(FMath::RInterpConstantTo(Boss->GetActorRotation(), Wanted, DeltaTime, RecoveryTurnSpeed));
 }
 
 void UBossCombatIntentComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -2175,6 +2180,8 @@ void UBossCombatIntentComponent::TickComponent(float DeltaTime, ELevelTick TickT
     UpdateGuardReward();
     UpdateFlinch(DeltaTime);
     UpdateHealthBar(DeltaTime);
+    UpdateOverheat(DeltaTime);
+    UpdateSlam(DeltaTime);
     UpdateAIPanel();
     RestoreTrueWeights();
     if (UpdatePerformance(DeltaTime)) return;
@@ -2217,18 +2224,16 @@ void UBossCombatIntentComponent::EndPlay(const EEndPlayReason::Type Reason)
         if (UGameViewportClient* Viewport = GetWorld() ? GetWorld()->GetGameViewport() : nullptr) Viewport->RemoveViewportWidgetContent(HealthBar.ToSharedRef());
         HealthBar.Reset();
     }
+    ClearSlamDecals();
+    for (UParticleSystemComponent* FX : HeatFX) if (FX) FX->DestroyComponent();
+    HeatFX.Reset();
+    if (VentFX) { VentFX->DestroyComponent(); VentFX = nullptr; }
     if (AIPanel.IsValid())
     {
         if (UGameViewportClient* Viewport = GetWorld() ? GetWorld()->GetGameViewport() : nullptr) Viewport->RemoveViewportWidgetContent(AIPanel.ToSharedRef());
         AIPanel.Reset();
     }
     Super::EndPlay(Reason);
-}
-
-float UBossCombatIntentComponent::OutcomeMultiplier(int32 CandidateSlot) const
-{
-    const FAttackOutcome* Outcome = OutcomeBySlot.Find(CandidateSlot);
-    return Outcome && GetWorld() ? OutcomeScale(Outcome->Whiffs, Outcome->bHit, static_cast<float>(GetWorld()->GetTimeSeconds() - Outcome->At)) : 1.f;
 }
 
 float UBossCombatIntentComponent::PlayerSpeedAway() const
@@ -2396,7 +2401,6 @@ float UBossCombatIntentLibrary::AdjustIntentCandidate(AActor* Boss, int32 Candid
     {
         Score *= PressureBoost(ActionId, Intent->HitsTakenWithin(4.f), static_cast<float>(Distance));
         Score *= Intent->FailureMultiplier(CandidateSlot);
-        Score *= Intent->OutcomeMultiplier(CandidateSlot);
     }
     // 가점이 여러 개 겹쳐도 기본 가중치의 4배까지만. 한 공격이 추첨을 독차지하지 않게 한다(실제 플레이에서 휩쓸기가 15배까지 올랐다).
     return FMath::Min(Score, 4.f * static_cast<float>(Number(Card, TEXT("BaseWeight"))));
@@ -2447,8 +2451,10 @@ bool UBossCombatIntentLibrary::CanStartPendingSlam(AActor* Boss)
     const AActor* Player = Cast<AActor>(Object(Boss,TEXT("ObservedPlayer")));
     if (!IsValid(Player)) Player = UGameplayStatics::GetPlayerCharacter(Boss,0);
     if (!IsValid(Player)) return false;
+    // 플레이어가 쓰러져 있는 동안에는 시작하지 않고 기다린다. 그때 시작하면 "대상 없음"으로 거부되고, 한 번뿐인 점프가 그대로 사라졌다.
+    if (Flag(Player,TEXT("bKnockedDown")) || Number(Player,TEXT("CurrentHealth"),1) <= 0) return false;
     return PendingSlamRange(Flag(Boss,TEXT("bFirstSlamPending")),Flag(Boss,TEXT("bPhaseTwo")),
-        FVector::Dist2D(Boss->GetActorLocation(),Player->GetActorLocation()),1000.f,5000.f);
+        FVector::Dist2D(Boss->GetActorLocation(),Player->GetActorLocation()),0.f,5000.f);      // 거리와 상관없이 한 번(전에는 1000cm 이상일 때만 써서 거의 나오지 않았다)
 }
 
 namespace
@@ -2476,9 +2482,9 @@ int32 ReachableAttackCount(const AActor* Boss, float Distance)
 
 namespace
 {
-// 화면 표시 방식. 0 = 끔(영상 촬영용), 1 = 새 표시, 2 = 예전 글자 패널.
+// 화면 표시. 0 = 끔(영상 촬영용), 1 = 켬.
 int32 PanelMode = 1;
-FAutoConsoleVariableRef CVarPanelMode(TEXT("boss.Panel"), PanelMode, TEXT("0 = no AI overlay, 1 = HFSM / Utility / GOAP overlay, 2 = the old text panel."));
+FAutoConsoleVariableRef CVarPanelMode(TEXT("boss.Panel"), PanelMode, TEXT("0 = no AI overlay, 1 = HFSM / Utility AI / GOAP overlay."));
 
 const TCHAR* ShortAttackLabel(int32 Id)
 {
@@ -2487,23 +2493,219 @@ const TCHAR* ShortAttackLabel(int32 Id)
     return Id >= 0 && Id < UE_ARRAY_COUNT(Labels) ? Labels[Id] : TEXT("?");
 }
 
-// 예전 글자 패널(블루프린트 위젯)을 보이거나 숨긴다. UMG 모듈에 기대지 않도록 이름과 리플렉션으로 부른다.
-void ShowOldDebugPanel(UWorld* World, bool bShow)
+}
+
+float UBossCombatIntentComponent::ReachableAttackWeight(float Distance) const
 {
-    UClass* PanelClass = FindFirstObject<UClass>(TEXT("WBP_BossAIDebug_C"), EFindFirstObjectOptions::NativeFirst);
-    if (!PanelClass) return;
-    TArray<UObject*> Panels;
-    GetObjectsOfClass(PanelClass, Panels, true, RF_ClassDefaultObject);
-    for (UObject* Panel : Panels)
+    const AActor* Boss = GetOwner();
+    const FArrayProperty* Actions = IsValid(Boss) ? FindFProperty<FArrayProperty>(Boss->GetClass(), TEXT("Actions")) : nullptr;
+    const FObjectPropertyBase* ActionType = Actions ? CastField<FObjectPropertyBase>(Actions->Inner) : nullptr;
+    if (!ActionType || !GetWorld()) return 0.f;
+    FScriptArrayHelper Cards(Actions, Actions->ContainerPtrToValuePtr<void>(Boss));
+    const double Now = GetWorld()->GetTimeSeconds();
+    float Total = 0.f;
+    for (int32 I = 0; I < Cards.Num(); ++I)
     {
-        if (!IsValid(Panel) || Panel->GetWorld() != World) continue;
-        if (UFunction* Set = Panel->FindFunction(TEXT("SetVisibility")))
+        const UObject* Card = ActionType->GetObjectPropertyValue(Cards.GetRawPtr(I));
+        const int32 Id = static_cast<int32>(Number(Card, TEXT("ActionId"), -1));
+        const bool bFoot = (Id >= 0 && Id <= 4) || Id == 9 || Id == OverheadId;       // 조건이 붙는 가드 브레이크와 돌진·점프·접근은 뺀다
+        if (!bFoot || !Flag(Card, TEXT("bEnabled")) || Now < ArrayNumber(Boss, TEXT("CooldownUntil"), I)) continue;
+        float Lo = 0.f, Hi = 0.f;
+        if (FMath::IsNearlyZero(NearestStartBand(Id, Distance, static_cast<float>(Number(Card, TEXT("MinDistance"))),
+            static_cast<float>(Number(Card, TEXT("MaxDistance"))), Lo, Hi))) Total += static_cast<float>(Number(Card, TEXT("BaseWeight")));
+    }
+    return Total;
+}
+
+// ---- 2페이즈: 과열 ------------------------------------------------------------------------------------------------
+// 체력 30% 아래에서 보스는 과열된다. 몸이 붉어지고 등에서 열기가 나온다. 연속 공격을 더 길게, 더 빨리 잇는다.
+// 대신 칠 때마다 열이 쌓이고, 가득 찬 채로 몰아치기가 끝나면 지쳐서 멈춘다. 붉은 정도가 곧 "얼마나 더 몰아칠 수 있나"다:
+// 플레이어는 색을 보고 멈출 때를 읽을 수 있고, 버틴 만큼 1페이즈보다 큰 틈을 얻는다.
+// 그로기와는 다르다. 플레이어가 만드는 것이 아니라 보스가 스스로 과열되어 멈추고, 추가 피해도 없다.
+void UBossCombatIntentComponent::UpdateOverheat(float DeltaTime)
+{
+    ACharacter* Boss = Cast<ACharacter>(GetOwner());
+    USkeletalMeshComponent* Mesh = Boss ? Boss->GetMesh() : nullptr;
+    if (!Mesh || !GetWorld() || GetWorld()->GetMapName().Contains(TEXT("Lvl_BossMotionLab"))) return;
+    const bool bHot = Flag(Boss, TEXT("bPhaseTwo")) && Number(Boss, TEXT("CurrentHealth")) > 0;
+    if (!bHot)
+    {
+        if (HeatOverlay && Mesh->GetOverlayMaterial() == HeatOverlay.Get()) Mesh->SetOverlayMaterial(nullptr);
+        if (HeatLight) { HeatLight->DestroyComponent(); HeatLight = nullptr; }
+        for (UParticleSystemComponent* FX : HeatFX) if (FX) FX->DestroyComponent();
+        HeatFX.Reset();
+        return;
+    }
+    const bool bAttacking = StateIs(Boss, TEXT("Boss.Combat.Attack.Telegraph")) || StateIs(Boss, TEXT("Boss.Combat.Attack.Windup"))
+        || StateIs(Boss, TEXT("Boss.Combat.Attack.Active")) || StateIs(Boss, TEXT("Boss.Combat.Attack.Link"));
+    if (!bAttacking && !bVenting) Heat = FMath::Max(0.f, Heat - HeatCoolPerSecond * DeltaTime);
+    if (!HeatOverlay)
+        if (UMaterialInterface* Aura = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/BossArena/Boss/Materials/M_Crunch_GuardBodyAura.M_Crunch_GuardBodyAura")))
         {
-            uint8 Visibility = bShow ? 3 : 1;      // ESlateVisibility: 1 = Collapsed, 3 = HitTestInvisible
-            Panel->ProcessEvent(Set, &Visibility);
+            HeatOverlay = UMaterialInstanceDynamic::Create(Aura, this);
+            HeatOverlay->SetVectorParameterValue(TEXT("AuraColor"), FLinearColor(1.f, .1f, .02f, 1.f));
         }
+    if (HeatOverlay)
+    {
+        // 열이 오를수록 붉어지고, 가득 차면 맥박처럼 깜빡인다. 가드 브레이크의 표시가 켜져 있는 동안에는 그것을 그대로 둔다.
+        const float Pulse = Heat >= 1.f ? .5f + .5f * FMath::Sin(static_cast<float>(GetWorld()->GetTimeSeconds()) * 14.f) : 0.f;
+        HeatOverlay->SetScalarParameterValue(TEXT("AuraStrength"), FMath::Lerp(.9f, 3.2f, FMath::Clamp(Heat, 0.f, 1.f)) + Pulse * 1.2f);
+        if (!bGuardOverlayActive && Mesh->GetOverlayMaterial() != HeatOverlay.Get()) Mesh->SetOverlayMaterial(HeatOverlay);
+    }
+    // 몸 안에서 달아오른 빛: 가슴에 붉은 등을 달고 열에 따라 밝힌다. 바닥과 플레이어에게도 붉은 빛이 비친다.
+    if (!HeatLight)
+    {
+        HeatLight = NewObject<UPointLightComponent>(Boss, TEXT("OverheatLight"));
+        HeatLight->SetupAttachment(Mesh, TEXT("Chest"));
+        HeatLight->RegisterComponent();
+        HeatLight->SetLightColor(FLinearColor(1.f, .12f, .03f));
+        HeatLight->SetAttenuationRadius(650.f);
+        HeatLight->SetCastShadows(false);
+    }
+    HeatLight->SetIntensity(FMath::Lerp(6000.f, 45000.f, FMath::Clamp(Heat, 0.f, 1.f)));
+    if (HeatFX.IsEmpty())
+    {
+        // 등의 분사구와 증기 자리에 열기를 붙인다(원래 이 캐릭터의 과열 연출에 쓰는 이펙트).
+        const auto Attach = [&](const TCHAR* Path, FName Socket, float Scale)
+        {
+            if (UParticleSystem* FX = LoadObject<UParticleSystem>(nullptr, Path, nullptr, LOAD_NoWarn))
+                HeatFX.Add(UGameplayStatics::SpawnEmitterAttached(FX, Mesh, Socket, FVector::ZeroVector, FRotator::ZeroRotator, FVector(Scale),
+                    EAttachLocation::KeepRelativeOffset, false));
+        };
+        Attach(TEXT("/Game/ParagonCrunch/FX/Particles/Abilities/Ultimate/FX/P_Crunch_JetFX_Stage_1.P_Crunch_JetFX_Stage_1"), TEXT("FX_BackJet_l"), 1.f);
+        Attach(TEXT("/Game/ParagonCrunch/FX/Particles/Abilities/Ultimate/FX/P_Crunch_JetFX_Stage_1.P_Crunch_JetFX_Stage_1"), TEXT("FX_BackJet_r"), 1.f);
+        Attach(TEXT("/Game/ParagonCrunch/FX/Particles/Abilities/Ultimate/FX/P_Crunch_Heat_Distortion.P_Crunch_Heat_Distortion"), TEXT("FX_UltSteam_Back"), 1.2f);
+        Invoke(Boss, TEXT("RecordCombatQA"), TEXT("overheat_begin"));
     }
 }
+
+// 지쳐서 멈춘다: 비틀거리는 동작으로 VentSeconds 동안 서 있고, 그동안 돌지도 고르지도 않는다. 끝나면 열이 0으로 돌아간다.
+bool UBossCombatIntentComponent::TryVent()
+{
+    ACharacter* Boss = Cast<ACharacter>(GetOwner());
+    UAnimInstance* Anim = Boss && Boss->GetMesh() ? Boss->GetMesh()->GetAnimInstance() : nullptr;
+    if (!Anim || bPerforming || !StateIs(Boss, TEXT("Boss.Combat.Ready")) || Number(Boss, TEXT("CurrentHealth")) <= 0) return false;
+    UAnimSequenceBase* Clip = LoadObject<UAnimSequenceBase>(nullptr,
+        TEXT("/Game/ParagonCrunch/Characters/Heroes/Crunch/Animations/Stunned_Loop.Stunned_Loop"), nullptr, LOAD_NoWarn);
+    if (!Clip || !TransitionState(Boss, TEXT("Boss.Combat.Ready"), TEXT("Boss.Combat.Position"), TEXT("과열: 지쳐서 멈춘다"))) return false;
+    Invoke(Boss, TEXT("StopBossLocomotion"));
+    if (AAIController* Controller = Cast<AAIController>(Boss->GetController())) Controller->StopMovement();
+    SetFlag(Boss, TEXT("bCombatApproachActive"), false);
+    SetNumber(Boss, TEXT("UtilityAction"), 0);
+    SetFlag(Boss, TEXT("bAttackIntentActive"), true);
+    SetFlag(Boss, TEXT("bPostAttackProbePending"), false);
+    PostAttackDecisionUntil = 0;
+    PerformMontage = Anim->PlaySlotAnimationAsDynamicMontage(Clip, ActingSlot, .3f, .35f, 1.f, 3, -1.f, 0.f);
+    bPerforming = bVenting = true;
+    PerformUntil = GetWorld()->GetTimeSeconds() + VentSeconds;
+    if (UParticleSystem* Steam = LoadObject<UParticleSystem>(nullptr,
+        TEXT("/Game/ParagonCrunch/FX/Particles/Abilities/Ultimate/FX/P_Crunch_JetFX_Stage_2.P_Crunch_JetFX_Stage_2"), nullptr, LOAD_NoWarn))
+        VentFX = UGameplayStatics::SpawnEmitterAttached(Steam, Boss->GetMesh(), TEXT("FX_UltSteam_Back"), FVector::ZeroVector, FRotator::ZeroRotator,
+            FVector(1.6f), EAttachLocation::KeepRelativeOffset, false);
+    const FString Reason = TEXT("과열: 지쳐서 멈춘다");
+    Status = Reason;
+    SetText(Boss, TEXT("IntentPhase"), TEXT("taunt"));
+    SetText(Boss, TEXT("IntentReason"), Reason);
+    SetText(Boss, TEXT("GoapReason"), Reason);
+    Invoke(Boss, TEXT("RecordCombatQA"), TEXT("vent"));
+    return true;
+}
+
+// ---- 점프 내려찍기의 예고와 충격파 -----------------------------------------------------------------------------------
+// 전에는 개발용 선으로 원을 그렸고, 떨어질 자리가 늦게 정해져서 가운데에서는 나갈 수 없었다.
+//   붉은 원(직격): 안에 있으면 점프해도 맞는다. 원이 안에서부터 차오르고, 다 차는 순간이 착지다. 자리가 정해지면 밝아진다.
+//   바깥 고리(충격파): 착지 순간에 그 안에 있으면 맞는다. 점프로 넘거나 밖으로 나간다.
+// 착지하면 고리가 퍼져 나가고 화면이 흔들린다.
+void UBossCombatIntentComponent::ClearSlamDecals()
+{
+    for (TObjectPtr<UDecalComponent>* Decal : {&SlamDirectDecal, &SlamShockDecal, &SlamWaveDecal})
+        if (*Decal) { (*Decal)->DestroyComponent(); *Decal = nullptr; }
+    SlamDirectMaterial = SlamShockMaterial = SlamWaveMaterial = nullptr;
+    SlamStartedAt = SlamWaveAt = -1.0;
+}
+
+void UBossCombatIntentComponent::UpdateSlam(float DeltaTime)
+{
+    ACharacter* Boss = Cast<ACharacter>(GetOwner());
+    if (!Boss || !GetWorld()) return;
+    const double Now = GetWorld()->GetTimeSeconds();
+    const float Direct = static_cast<float>(Number(Boss, TEXT("SlamDirectRadius"), 320.0)), Shock = static_cast<float>(Number(Boss, TEXT("SlamShockRadius"), 700.0));
+    const float HalfHeight = Boss->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+    const auto Spawn = [&](TObjectPtr<UDecalComponent>& Decal, TObjectPtr<UMaterialInstanceDynamic>& Material, const FVector& At, float Radius, const FLinearColor& Color, float Fill)
+    {
+        UMaterialInterface* Ring = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/BossArena/Boss/Effects/M_SlamTelegraph.M_SlamTelegraph"), nullptr, LOAD_NoWarn);
+        if (!Ring) return;
+        Decal = UGameplayStatics::SpawnDecalAtLocation(this, Ring, FVector(260.f, 100.f, 100.f), At, FRotator(-90.f, 0.f, 0.f), 0.f);
+        if (!Decal) return;
+        Decal->SetWorldScale3D(FVector(1.f, Radius / 100.f, Radius / 100.f));
+        Material = Decal->CreateDynamicMaterialInstance();
+        if (Material) { Material->SetVectorParameterValue(TEXT("Color"), Color); Material->SetScalarParameterValue(TEXT("Fill"), Fill); Material->SetScalarParameterValue(TEXT("Progress"), 0.f); }
+    };
+    // 퍼져 나가는 고리(착지 뒤 0.4초).
+    if (SlamWaveAt >= 0.0)
+    {
+        const float T = static_cast<float>((Now - SlamWaveAt) / .4);
+        if (T >= 1.f || !SlamWaveDecal) { if (SlamWaveDecal) SlamWaveDecal->DestroyComponent(); SlamWaveDecal = nullptr; SlamWaveMaterial = nullptr; SlamWaveAt = -1.0; }
+        else
+        {
+            const float Radius = FMath::Lerp(Direct * .6f, Shock * 1.05f, FMath::Sqrt(T));
+            SlamWaveDecal->SetWorldScale3D(FVector(1.f, Radius / 100.f, Radius / 100.f));
+            if (SlamWaveMaterial) SlamWaveMaterial->SetScalarParameterValue(TEXT("Opacity"), 1.f - T);
+        }
+    }
+    const bool bSlam = static_cast<int32>(Number(Object(Boss, TEXT("ActiveAction")), TEXT("ActionId"), -1)) == 8
+        && (StateIs(Boss, TEXT("Boss.Combat.Attack.Telegraph")) || StateIs(Boss, TEXT("Boss.Combat.Attack.Windup")) || StateIs(Boss, TEXT("Boss.Combat.Attack.Active")));
+    if (!bSlam)
+    {
+        if (SlamStartedAt >= 0.0)
+        {
+            // 착지했다: 예고를 지우고 고리를 퍼뜨린다.
+            const FVector Center = SlamDirectDecal ? SlamDirectDecal->GetComponentLocation() : Boss->GetActorLocation() - FVector(0, 0, HalfHeight);
+            if (SlamDirectDecal) SlamDirectDecal->DestroyComponent();
+            if (SlamShockDecal) SlamShockDecal->DestroyComponent();
+            SlamDirectDecal = SlamShockDecal = nullptr;
+            SlamDirectMaterial = SlamShockMaterial = nullptr;
+            SlamStartedAt = -1.0;
+            if (StateIs(Boss, TEXT("Boss.Combat.Attack.Recovery")))
+            {
+                Spawn(SlamWaveDecal, SlamWaveMaterial, Center, Direct * .6f, FLinearColor(1.f, .55f, .15f, 1.f), 0.f);
+                SlamWaveAt = Now;
+                if (AActor* Player = UGameplayStatics::GetPlayerPawn(this, 0)) UBossCombatIntentLibrary::PlayPlayerHitShake(Player, 1.8f);
+                Invoke(Boss, TEXT("RecordCombatQA"), TEXT("slam_wave"));
+            }
+        }
+        return;
+    }
+    FVector Landing = Boss->GetActorLocation();
+    if (const FStructProperty* Where = FindFProperty<FStructProperty>(Boss->GetClass(), TEXT("SlamTargetLocation")))
+        if (Where->Struct == TBaseStructure<FVector>::Get()) Landing = *Where->ContainerPtrToValuePtr<FVector>(Boss);
+    // 바닥 높이: 뛰어오르기 전의 높이에서 캡슐의 절반을 뺀다(공중에 있는 동안 보스의 높이는 쓸 수 없다).
+    if (SlamStartedAt < 0.0)
+    {
+        SlamStartedAt = Now;
+        // 바닥 표시가 캐릭터 몸에 입혀지지 않게 한다(플레이어가 통째로 붉게 칠해졌다).
+        for (AActor* Body : {static_cast<AActor*>(Boss), static_cast<AActor*>(UGameplayStatics::GetPlayerPawn(this, 0))})
+            if (IsValid(Body))
+            {
+                TInlineComponentArray<UPrimitiveComponent*> Parts(Body);
+                for (UPrimitiveComponent* Part : Parts) Part->SetReceivesDecals(false);
+            }
+        SlamWaveCenter = FVector(0, 0, Boss->GetActorLocation().Z - HalfHeight + 2.f);
+        Spawn(SlamShockDecal, SlamShockMaterial, Landing, Shock, FLinearColor(1.f, .6f, .1f, 1.f), .05f);
+        Spawn(SlamDirectDecal, SlamDirectMaterial, Landing, Direct, FLinearColor(1.f, .12f, .05f, 1.f), .12f);
+        Invoke(Boss, TEXT("RecordCombatQA"), TEXT("slam_telegraph"));
+    }
+    const FVector Ground(Landing.X, Landing.Y, SlamWaveCenter.Z);
+    const float Elapsed = static_cast<float>(Now - SlamStartedAt);
+    const float Impact = FMath::Max(.5f, static_cast<float>(Number(Boss, TEXT("SlamImpactTime"), 2.4)));
+    const bool bLocked = Elapsed >= static_cast<float>(Number(Boss, TEXT("SlamTrackUntilSeconds"), 1.0));
+    if (SlamShockDecal) SlamShockDecal->SetWorldLocation(Ground);
+    if (SlamDirectDecal) SlamDirectDecal->SetWorldLocation(Ground);
+    if (SlamDirectMaterial)
+    {
+        SlamDirectMaterial->SetScalarParameterValue(TEXT("Progress"), FMath::Clamp(Elapsed / Impact, 0.f, 1.f));
+        SlamDirectMaterial->SetScalarParameterValue(TEXT("Fill"), bLocked ? .3f : .12f);      // 자리가 정해지면 밝아진다: "이제 이 원 밖으로"
+    }
 }
 
 void UBossCombatIntentComponent::UpdateAIPanel()
@@ -2515,12 +2717,6 @@ void UBossCombatIntentComponent::UpdateAIPanel()
     {
         AIPanel = SNew(SBossAIPanel);
         Viewport->AddViewportWidgetContent(AIPanel.ToSharedRef(), 4);
-    }
-    // 예전 패널은 늦게 만들어질 수 있어서, 숨기는 것은 가끔 다시 한다.
-    if (PanelModeApplied != PanelMode || (PanelMode != 2 && GFrameCounter % 60 == 0))
-    {
-        PanelModeApplied = PanelMode;
-        ShowOldDebugPanel(GetWorld(), PanelMode == 2);
     }
     AIPanel->Opacity = PanelMode == 1 && FirstDecisionAt >= 0.0 && Number(Boss, TEXT("CurrentHealth")) > 0 ? 1.f : 0.f;
     if (AIPanel->Opacity <= 0.f) return;
@@ -2539,6 +2735,8 @@ void UBossCombatIntentComponent::UpdateAIPanel()
     AIPanel->StringWanted = FMath::Max(StringHitsWanted, StringUsed.Num());
     AIPanel->StringText = FText::FromString(FString::Printf(TEXT("%d / %d   %s"), StringUsed.Num(), FMath::Max(StringHitsWanted, StringUsed.Num()), *Names));
     AIPanel->Plan = FText::FromString(Text(Boss, TEXT("GoapReason")));
+    AIPanel->MoveLine = FText::FromString(MoveLine);
+    AIPanel->Heat = Flag(Boss, TEXT("bPhaseTwo")) ? FMath::Clamp(Heat, 0.f, 1.f) : -1.f;
     const AActor* Player = UGameplayStatics::GetPlayerPawn(this, 0);
     if (IsValid(Player))
     {
@@ -3061,11 +3259,21 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBossFootworkTest,"Battle.Boss.Footwork",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FBossFootworkTest::RunTest(const FString& Parameters)
 {
-    TestEqual(TEXT("One attack, room to breathe: mostly keeps punching"), FootworkChance(1, false, false, .7f), .25f);
-    TestEqual(TEXT("Crowded raises it"), FootworkChance(1, true, false, .7f), .45f);
-    TestEqual(TEXT("Three planted attacks: almost always moves"), FootworkChance(3, false, false, .7f), .85f);
-    TestEqual(TEXT("Never certain"), FootworkChance(5, true, false, .7f), .9f);
-    TestTrue(TEXT("Phase two rests less"), FootworkChance(2, true, true, .7f) < FootworkChance(2, true, false, .7f));
+    {
+        float M[3];
+        MovementScores(250.f, 1, 0, false, 200.f, 300.f, 460.f, 40.f, 45.f, 25.f, .7f, M);
+        TestTrue(TEXT("Punching range, first attack: only circling competes"), M[0] == 40.f && M[1] == 0.f && M[2] == 0.f);
+        MovementScores(250.f, 3, 0, false, 200.f, 300.f, 460.f, 40.f, 45.f, 25.f, .7f, M);
+        TestEqual(TEXT("Three planted attacks: circling more than doubles"), M[0], 88.f);
+        MovementScores(180.f, 1, 2, false, 200.f, 300.f, 460.f, 40.f, 45.f, 25.f, .7f, M);
+        TestEqual(TEXT("Crowded and being hit: backing off rises with the hits"), M[2], 75.f);
+        MovementScores(400.f, 1, 0, false, 200.f, 300.f, 460.f, 40.f, 45.f, 25.f, .7f, M);
+        TestTrue(TEXT("Outside punching range: walking in, not circling"), M[0] == 0.f && M[1] == 45.f);
+        MovementScores(600.f, 1, 0, false, 200.f, 300.f, 460.f, 40.f, 45.f, 25.f, .7f, M);
+        TestTrue(TEXT("Far away: no footwork at all (the boss runs or attacks)"), M[0] + M[1] + M[2] == 0.f);
+        MovementScores(250.f, 1, 0, true, 200.f, 300.f, 460.f, 40.f, 45.f, 25.f, .7f, M);
+        TestEqual(TEXT("Phase two walks less"), M[0], 28.f);
+    }
     TestTrue(TEXT("Player in front and near"), FootworkAllowed(180, 1, 460, 0));
     TestFalse(TEXT("Far player: approach instead"), FootworkAllowed(500, 1, 460, 0));
     TestFalse(TEXT("Player behind: turning comes first"), FootworkAllowed(180, 0, 460, 0));
@@ -3079,13 +3287,6 @@ bool FBossFootworkTest::RunTest(const FString& Parameters)
     const float StillLeft = Left;
     FootworkSideCosts(0, .9f, Left, Right);
     TestTrue(TEXT("Standing player: the side varies"), StillLeft != Left);
-
-    const auto Crowded = ChooseFootworkWants(172, 200, 300, .1f);
-    TestTrue(TEXT("Crowded, low roll: just make room"), Crowded.bSpace && !Crowded.bAngle && !Crowded.bPocket);
-    TestTrue(TEXT("Crowded, higher roll: room and angle"), ChooseFootworkWants(172, 200, 300, .5f).bAngle);
-    TestTrue(TEXT("In the pocket: only the angle"), !ChooseFootworkWants(260, 200, 300, .1f).bSpace && ChooseFootworkWants(260, 200, 300, .1f).bAngle);
-    TestTrue(TEXT("Out of the pocket: always walks in"), ChooseFootworkWants(400, 200, 300, .1f).bPocket);
-    TestTrue(TEXT("Out of the pocket, higher roll: walks in on an angle"), ChooseFootworkWants(400, 200, 300, .7f).bAngle);
 
     using A = EBossPositionAction;
     TestTrue(TEXT("Step back ends at the comfort distance"), FootworkLegDone(A::StepBack, 255, 0, 0, 260, 240, .2f));
@@ -3116,12 +3317,6 @@ bool FBossUtilityPenaltyTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Walking back: aim further"), PredictedDistance(450.f, 300.f, 1.f), 660.f);
     TestEqual(TEXT("A dodge's burst of speed cannot push the guess past the cap"), PredictedDistance(450.f, 900.f, 1.f), 670.f);
     TestEqual(TEXT("Coming in: aim closer"), PredictedDistance(450.f, -200.f, 1.f), 310.f);
-    TestEqual(TEXT("One whiff lowers the attack"), OutcomeScale(1, false, 0.f), .7f);
-    TestEqual(TEXT("Two in a row lower it more"), OutcomeScale(2, false, 0.f), .45f);
-    TestEqual(TEXT("The memory fades in 20 seconds"), OutcomeScale(2, false, 20.f), 1.f);
-    TestEqual(TEXT("A hit raises the attack"), OutcomeScale(0, true, 0.f), 1.25f);
-    TestEqual(TEXT("A block is neither"), OutcomeScale(0, false, 0.f), 1.f);
-    TestEqual(TEXT("Never used: no memory"), OutcomeScale(0, false, -1.f), 1.f);
     return true;
 }
 
@@ -3241,7 +3436,7 @@ bool FBossDesignerDistanceBandTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("500cm stops two-hit entry"), DistanceBandMultiplier(9,500),0.f);
     TestEqual(TEXT("Dash candidate retains its own eligibility"), DistanceBandMultiplier(6,500),1.f);
     TestFalse(TEXT("Phase one never executes pending slam"), PendingSlamRange(true,false,1000,1000,5000));
-    TestFalse(TEXT("Close phase entry does not force jump"), PendingSlamRange(true,true,175,1000,5000));
+    TestTrue(TEXT("Phase two starts the jump from point-blank too"), PendingSlamRange(true,true,175,0,5000));
     TestFalse(TEXT("Below jump band remains normal combat"), PendingSlamRange(true,true,999,1000,5000));
     TestTrue(TEXT("Phase two 1000cm can start pending jump"), PendingSlamRange(true,true,1000,1000,5000));
     return true;

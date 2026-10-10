@@ -20,8 +20,10 @@ public:
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     bool IsActive() const { return bActive || bReassessing || bFootworkActive || bPerforming; }
     float FailureMultiplier(int32 Slot) const;
-    /** 결과의 기억: 이 자리의 공격이 최근에 헛쳤으면 1보다 작고, 맞혔으면 1보다 크다. */
-    float OutcomeMultiplier(int32 Slot) const;
+    /** 지금 거리에서 바로 칠 수 있는 공격들의 기본 가중치 합. "칠지 걸을지"를 정할 때 공격 쪽의 점수로 쓴다. */
+    float ReachableAttackWeight(float Distance) const;
+    /** 화면 표시용: 마지막 "칠지 걸을지" 판단의 점수 한 줄. */
+    FString MoveLine;
     /** 플레이어가 보스에게서 멀어지는 속도(cm/초). 다가오면 음수. */
     float PlayerSpeedAway() const;
     /** 화면 표시용: 지금 후딜이 닫혀 있는지 열려 있는지와 그 공격의 결과. 후딜이 아니면 빈 문자열. */
@@ -81,15 +83,13 @@ public:
     /** 걸어 들어갈 때 멈추는 간격과 속도. 달리지 않고 성큼성큼 걷는다. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float PressStopDistance = 240.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float PressSpeed = 330.f;
-    /** 주먹 거리 밖에 있는 플레이어에게 걸어 들어갈 확률. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float PressChance = .3f;
+    /** 움직임의 점수. 공격 뒤 "칠지 걸을지"를 정할 때, 지금 칠 수 있는 공격들의 가중치 합과 같은 표에서 겨룬다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float CircleScore = 40.f;   // 둘레를 걷는다
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float PressScore = 45.f;    // 걸어 들어간다
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float SpaceScore = 25.f;    // 빠진다
 
     /** 2페이즈는 덜 쉬고 더 몰아친다: 발놀림 확률에 곱한다. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float PhaseTwoFootworkScale = .7f;
-    /** 후딜의 이 비율이 지나면 느리게 돌 수 있다. 그 전에는 전혀 돌지 않는다(반격 시간). */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Recovery") float RecoveryTurnStart = .5f;
-    /** 후딜 뒤쪽에 발을 둔 채 도는 속도(도/초). 0이면 쓰지 않는다: 발이 미끄러져 보여서 끄고, 후딜을 일찍 끝내는 방식으로 바꿨다. */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Recovery") float RecoveryTurnSpeed = 0.f;
     /** 뒤쪽 대응: 공격이 끝났을 때 플레이어가 등 뒤에 있으면, 뒤돌아보는 대신 돌면서 치는 확률. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Rear") float RearResponseChance = .6f;
     /** 뒤쪽 대응 뒤 다시 쓸 수 있을 때까지의 시간(초). */
@@ -116,7 +116,16 @@ public:
     /** 이어 치기: 왼손·오른손으로 시작했을 때 두 번 / 세 번까지 이을 몫(나머지는 한 번만 친다). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float StringTwoShare = .4f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float StringThreeShare = .25f;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float PhaseTwoStringThreeShare = .4f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float PhaseTwoStringThreeShare = .5f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float PhaseTwoStringTwoShare = .45f;
+    // ---- 2페이즈: 과열 ----
+    /** 2페이즈의 첫 공격 후딜 배율(1페이즈는 RecoveryScale). 더 빨리 다음으로 넘어간다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Overheat") float PhaseTwoRecoveryScale = .6f;
+    /** 열: 2페이즈에서 공격할 때마다 쌓이고, 공격하지 않는 동안 식는다. 가득 찬 채로 몰아치기가 끝나면 지쳐서 멈춘다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Overheat") float HeatPerAttack = .17f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Overheat") float HeatCoolPerSecond = .04f;
+    /** 지쳐서 멈추는 시간(초). 플레이어가 크게 때릴 수 있는 틈이다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Overheat") float VentSeconds = 2.8f;
     /** 플레이어가 최근 회피를 두 번 넘게 했으면 세 번까지 이을 몫에 더한다(한 번 피하고 들어오는 것을 잡는다). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float DodgeStringBonus = .15f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float ChainStartFraction = .35f;
@@ -219,8 +228,6 @@ private:
     bool bWhiffed = false;           // 이번 후딜은 헛친 뒤의 후딜인가
     bool bAttackHit = false;         // 이번 공격이 피해를 줬는가(막힌 것은 아니다)
     bool bRecoveryOpen = false;      // 후딜의 하위 상태: 거짓 = 닫힘(어떤 이유로도 못 나감), 참 = 열림(규칙이 맞으면 나감)
-    struct FAttackOutcome { int32 Whiffs = 0; bool bHit = false; double At = -1.0; };
-    TMap<int32, FAttackOutcome> OutcomeBySlot;
     double WhiffPlayerHealth = -1.0;
     double WhiffPressure = -1.0;
     float BowPitch = 0.f;
@@ -239,7 +246,26 @@ private:
     /** 처음 보는 사람이 읽는 AI 표시(왼쪽 HFSM·GOAP, 오른쪽 Utility). 콘솔 boss.Panel 0 = 끔, 1 = 이 표시, 2 = 예전 글자 패널. */
     void UpdateAIPanel();
     TSharedPtr<class SBossAIPanel> AIPanel;
-    int32 PanelModeApplied = -1;
+    // ---- 2페이즈 과열과 점프 내려찍기의 표시 ----
+    void UpdateOverheat(float DeltaTime);
+    bool TryVent();
+    void UpdateSlam(float DeltaTime);
+    void ClearSlamDecals();
+    float Heat = 0.f;
+    bool bVenting = false;
+    UPROPERTY(Transient) TObjectPtr<class UMaterialInstanceDynamic> HeatOverlay;
+    UPROPERTY(Transient) TArray<TObjectPtr<UParticleSystemComponent>> HeatFX;
+    UPROPERTY(Transient) TObjectPtr<UParticleSystemComponent> VentFX;
+    UPROPERTY(Transient) TObjectPtr<class UPointLightComponent> HeatLight;
+    UPROPERTY(Transient) TObjectPtr<class UDecalComponent> SlamDirectDecal;
+    UPROPERTY(Transient) TObjectPtr<class UDecalComponent> SlamShockDecal;
+    UPROPERTY(Transient) TObjectPtr<class UDecalComponent> SlamWaveDecal;
+    UPROPERTY(Transient) TObjectPtr<class UMaterialInstanceDynamic> SlamDirectMaterial;
+    UPROPERTY(Transient) TObjectPtr<class UMaterialInstanceDynamic> SlamShockMaterial;
+    UPROPERTY(Transient) TObjectPtr<class UMaterialInstanceDynamic> SlamWaveMaterial;
+    double SlamStartedAt = -1.0;
+    double SlamWaveAt = -1.0;
+    FVector SlamWaveCenter = FVector::ZeroVector;
     float BarTrail = 1.f;
     float BarDamage = 0.f;
     float BarOpacity = 0.f;

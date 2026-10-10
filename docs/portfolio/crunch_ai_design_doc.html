@@ -149,7 +149,7 @@ ol.steps { counter-reset: none; }
   .why > div:last-child { border-bottom: 0; }
 }
 
-/* Utility cards laid on the distance axis */
+/* Utility AI cards laid on the distance axis */
 .lanes-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 14px 16px; }
 .lanes { min-width: 640px; display: grid; gap: 5px; }
 .lane { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); gap: 10px; align-items: center; }
@@ -209,7 +209,7 @@ ol.steps { counter-reset: none; }
   <div class="why">
     <div><div class="lab">원한 경험</div><p>거리마다 보스가 다르게 움직인다. 멀다고 추격만 하면 재미가 없다.</p></div>
     <div><div class="lab">필요하다고 본 것</div><p>거리대마다 쓸 수 있는 행동이 따로 있어야 한다.</p></div>
-    <div><div class="lab">구현</div><p>단거리·중거리·장거리로 나누고, 중거리 전용 공격 모션과 달려오기를 넣었다.</p></div>
+    <div><div class="lab">구현</div><p>공격마다 닿는 거리를 두고, 멀리서도 닿도록 달려들며 치는 모션을 만들었다. 닿는 공격이 없으면 달려온다.</p></div>
   </div>
   <div class="why">
     <div><div class="lab">원한 경험</div><p>붙어서 싸워도 보스가 살아 있는 상대로 보인다. 제자리에 박혀서 주먹만 내는 기계가 아니다.</p></div>
@@ -244,10 +244,10 @@ ol.steps { counter-reset: none; }
   <p>위 경험을 만들려면 보스가 "언제 판단하고, 무엇을 고르고, 어떻게 자리를 잡는지"가 따로 정해져야 한다고 봤다. 한 시스템이 다 하면 공격 도중에 마음을 바꾸거나, 고른 공격을 치러 가다가 다른 공격으로 바뀌는 일이 생긴다.</p>
   <div class="trio">
     <div class="t-h"><div class="who">HFSM · 상태 기계</div><div class="q">지금 해도 되나?</div><p>보스가 지금 어떤 단계인지 관리한다. 시작한 공격과 후딜을 끝까지 지킨다.</p></div>
-    <div class="t-u"><div class="who">Utility AI · 점수 추첨</div><div class="q">무엇을 할까?</div><p>지금 가능한 행동에 점수를 주고 하나를 뽑는다.</p></div>
-    <div class="t-g"><div class="who">GOAP · 자리 계획</div><div class="q">어떻게 거기까지 갈까?</div><p>고른 공격을 칠 자리까지 필요한 발걸음의 순서를 찾는다. 공격 사이에 간격과 각을 다시 잡는 걸음도 여기서 찾는다.</p></div>
+    <div class="t-u"><div class="who">Utility AI · 점수 추첨</div><div class="q">무엇을 할까?</div><p>칠지 걸을지, 친다면 무엇으로 시작해서 몇 번 칠지를 점수로 뽑는다.</p></div>
+    <div class="t-g"><div class="who">GOAP · 순서 계획</div><div class="q">어떤 순서로 할까?</div><p>연속 공격의 남은 순서와, 칠 자리나 새 간격까지 가는 걸음의 순서를 짠다. 조건과 결과가 맞물리는 순서를 찾는 일이다.</p></div>
   </div>
-  <p class="note">세 시스템이 같은 공격을 각각 고르지 않는다. Utility가 고른 공격을 GOAP가 준비하고 HFSM이 지킨다.</p>
+  <p class="note">세 시스템이 같은 것을 각각 정하지 않는다. Utility AI가 고른 것을 GOAP가 순서로 만들고, HFSM이 그 순서가 끼어들면 안 되는 때를 지킨다.</p>
 </section>
 
 <section aria-labelledby="hfsm-h">
@@ -330,9 +330,9 @@ stateDiagram-v2
     <li class="pick"><b>2. 기본 가중치</b><span>카드에 적힌 숫자. 공격의 역할에 따라 다르다</span></li>
     <li class="pick"><b>3. 플레이어 행동 반영</b><span>회피를 봤으면 연속기·휩쓸기, 가드를 봤으면 가드 브레이크를 올린다</span></li>
     <li class="pick"><b>4. 감점과 가점</b><span>최근에 쓴 공격은 깎고, 오래 안 쓴 공격은 올린다</span></li>
-    <li class="pick"><b>5. 거리대 보정</b><span>주먹은 중거리 끝(650cm)부터 0점. 2연타는 500cm부터</span></li>
+    <li class="pick"><b>5. 닿는 거리</b><span>칠 때쯤의 예상 거리가 그 공격의 닿는 거리 밖이면 0점. 가장 먼 공격이 650cm</span></li>
     <li class="pick"><b>6. 실패 감점</b><span>방금 자리 잡기에 실패한 공격은 3초 동안 4분의 1</span></li>
-    <li class="pick"><b>7. 접근 정리</b><span>칠 수 있는 공격이 있으면 접근은 0점. 중거리에서는 조금 남긴다(공격 점수 합의 15%)</span></li>
+    <li class="pick"><b>7. 달려오기 정리</b><span>제자리 공격이 닿으면 달려오기는 0점. 달려드는 공격만 닿으면 조금 남긴다(셋 이상 닿을 때 공격 점수 합의 15%)</span></li>
     <li class="pick"><b>8. 추첨</b><span>남은 점수 비율대로 하나</span></li>
   </ol>
   <h3>거리 위에 놓은 카드</h3>
@@ -365,7 +365,7 @@ stateDiagram-v2
         <tr><td>주력</td><td>왼손 휘두르기</td><td class="n">26</td><td>가장 자주 보는 공격. 플레이어가 먼저 배우는 박자다.</td></tr>
         <tr><td>주력</td><td>오른손 휘두르기</td><td class="n">22</td><td>왼손보다 조금 덜 나온다. 둘이 똑같으면 번갈아 치는 것처럼 읽힌다.</td></tr>
         <tr><td>변칙</td><td>2연타</td><td class="n">20</td><td>단타에 익숙해진 플레이어의 반격 타이밍을 흔든다.</td></tr>
-        <tr><td>변칙</td><td>어퍼컷</td><td class="n">20</td><td>단거리의 패턴 수를 늘린다. 주력보다 드물게.</td></tr>
+        <tr><td>변칙</td><td>어퍼컷</td><td class="n">20</td><td>가까운 거리의 패턴 수를 늘린다. 주력보다 드물게.</td></tr>
         <tr><td>변칙</td><td>오른손 내려찍기</td><td class="n">16</td><td>가장 느리고 가장 아픈 한 방. 팔을 뒤로 당겼다가 머리 위에서 내려친다. 쿨다운 6초.</td></tr>
         <tr><td>응징</td><td>잽 → 잽 → 훅</td><td class="n">12 → 40</td><td>평소에도 가끔. 회피 2회를 보면 20, 3회 이상이면 40.</td></tr>
         <tr><td>응징</td><td>양손 휩쓸기</td><td class="n">12 → 36</td><td>평소에는 드물다. 회피 2회 이상을 보면 3배.</td></tr>
@@ -381,12 +381,12 @@ stateDiagram-v2
 <div class="share"><div class="sname"><b>200cm</b><span>평소</span></div><div class="strip"><div class="seg k-a" style="flex:26"><span>왼손</span><b>23%</b></div><div class="seg k-a" style="flex:22"><span>오른손</span><b>20%</b></div><div class="seg k-a" style="flex:20"><span>2연타</span><b>18%</b></div><div class="seg k-a" style="flex:20"><span>어퍼컷</span><b>18%</b></div><div class="seg k-c" style="flex:12"><span>연속기</span><b>11%</b></div><div class="seg k-c" style="flex:12"><span>휩쓸기</span><b>11%</b></div></div></div>
 <div class="share"><div class="sname"><b>200cm</b><span>회피를 3번 본 뒤</span></div><div class="strip"><div class="seg k-c" style="flex:40"><span>연속기</span><b>24%</b></div><div class="seg k-c" style="flex:36"><span>휩쓸기</span><b>22%</b></div><div class="seg k-a" style="flex:26"><span>왼손</span><b>16%</b></div><div class="seg k-a" style="flex:22"><span>오른손</span><b>13%</b></div><div class="seg k-a" style="flex:20"><span>2연타</span><b>12%</b></div><div class="seg k-a" style="flex:20"><span>어퍼컷</span><b>12%</b></div></div></div>
 <div class="share"><div class="sname"><b>200cm</b><span>가드를 2초 본 뒤</span></div><div class="strip"><div class="seg k-c" style="flex:40"><span>가드 브레이크</span><b>26%</b></div><div class="seg k-a" style="flex:26"><span>왼손</span><b>17%</b></div><div class="seg k-a" style="flex:22"><span>오른손</span><b>14%</b></div><div class="seg k-a" style="flex:20"><span>2연타</span><b>13%</b></div><div class="seg k-a" style="flex:20"><span>어퍼컷</span><b>13%</b></div><div class="seg k-c" style="flex:12"><span>연속기</span><b>8%</b></div><div class="seg k-c" style="flex:12"><span>휩쓸기</span><b>8%</b></div></div></div>
-<div class="share"><div class="sname"><b>320cm</b><span>단거리 끝</span></div><div class="strip"><div class="seg k-a" style="flex:26"><span>왼손</span><b>30%</b></div><div class="seg k-a" style="flex:22"><span>오른손</span><b>26%</b></div><div class="seg k-c" style="flex:12"><span>휩쓸기</span><b>14%</b></div><div class="seg k-a" style="flex:12"><span>2연타 (한 걸음)</span><b>14%</b></div><div class="seg k-a" style="flex:12"><span>어퍼컷 (한 걸음)</span><b>14%</b></div><div class="seg k-c" style="flex:2.16"><span>연속기 (한 걸음)</span><b>3%</b></div></div></div>
-<div class="share"><div class="sname"><b>450cm</b><span>중거리</span></div><div class="strip"><div class="seg k-a" style="flex:26"><span>왼손</span><b>19%</b></div><div class="seg k-a" style="flex:22"><span>오른손</span><b>16%</b></div><div class="seg k-f" style="flex:20"><span>슈퍼맨 펀치</span><b>15%</b></div><div class="seg k-a" style="flex:20"><span>어퍼컷</span><b>15%</b></div><div class="seg k-c" style="flex:12"><span>연속기</span><b>9%</b></div><div class="seg k-m" style="flex:35"><span>달려오기</span><b>26%</b></div></div></div>
+<div class="share"><div class="sname"><b>320cm</b><span>제자리 공격의 끝</span></div><div class="strip"><div class="seg k-a" style="flex:26"><span>왼손</span><b>30%</b></div><div class="seg k-a" style="flex:22"><span>오른손</span><b>26%</b></div><div class="seg k-c" style="flex:12"><span>휩쓸기</span><b>14%</b></div><div class="seg k-a" style="flex:12"><span>2연타 (한 걸음)</span><b>14%</b></div><div class="seg k-a" style="flex:12"><span>어퍼컷 (한 걸음)</span><b>14%</b></div><div class="seg k-c" style="flex:2.16"><span>연속기 (한 걸음)</span><b>3%</b></div></div></div>
+<div class="share"><div class="sname"><b>450cm</b><span>달려드는 공격만</span></div><div class="strip"><div class="seg k-a" style="flex:26"><span>왼손</span><b>19%</b></div><div class="seg k-a" style="flex:22"><span>오른손</span><b>16%</b></div><div class="seg k-f" style="flex:20"><span>슈퍼맨 펀치</span><b>15%</b></div><div class="seg k-a" style="flex:20"><span>어퍼컷</span><b>15%</b></div><div class="seg k-c" style="flex:12"><span>연속기</span><b>9%</b></div><div class="seg k-m" style="flex:35"><span>달려오기</span><b>26%</b></div></div></div>
 <div class="share"><div class="sname"><b>450cm</b><span>플레이어가 물러나는 중</span></div><div class="strip"><div class="seg k-a" style="flex:26"><span>왼손</span><b>15%</b></div><div class="seg k-a" style="flex:22"><span>오른손</span><b>13%</b></div><div class="seg k-f" style="flex:20"><span>슈퍼맨 펀치</span><b>12%</b></div><div class="seg k-a" style="flex:20"><span>어퍼컷</span><b>12%</b></div><div class="seg k-c" style="flex:12"><span>연속기</span><b>7%</b></div><div class="seg k-m" style="flex:70"><span>달려오기</span><b>41%</b></div></div></div>
-<div class="share"><div class="sname"><b>800cm</b><span>장거리</span></div><div class="strip"><div class="seg k-m" style="flex:70"><span>달려오기</span><b>100%</b></div></div></div>
+<div class="share"><div class="sname"><b>800cm</b><span>닿는 공격 없음</span></div><div class="strip"><div class="seg k-m" style="flex:70"><span>달려오기</span><b>100%</b></div></div></div>
   </div>
-  <p class="note">같은 200cm라도 플레이어가 무엇을 했느냐에 따라 띠가 달라진다. 계속 구르면 연속기와 휩쓸기가, 계속 막으면 가드 브레이크가 커진다. 중거리에서는 네 가지 주먹이 달려드는 버전으로 나오고, 플레이어가 물러나는 중이면 달려오기가 두 배로 늘어난다.</p>
+  <p class="note">같은 200cm라도 플레이어가 무엇을 했느냐에 따라 띠가 달라진다. 계속 구르면 연속기와 휩쓸기가, 계속 막으면 가드 브레이크가 커진다. 먼 거리에서는 네 가지 주먹이 달려드는 버전으로 나오고, 플레이어가 물러나는 중이면 달려오기가 두 배로 늘어난다.</p>
 
   <h3>추첨: 점수가 높다고 반드시 뽑히지는 않는다</h3>
   <div class="why">
@@ -437,19 +437,7 @@ stateDiagram-v2
     <div><div class="k">보정의 한계</div><div>최대 220cm. 회피 한 번의 순간 속도로 예측이 튀지 않게 한다.</div></div>
     <div><div class="k">쓰는 곳</div><div>후보 거르기(닿는가), 달려드는 모션 고르기(가까운 쪽 / 먼 쪽), 달려드는 거리. 달려드는 거리는 여전히 걸음이 시작될 때 한 번만 정한다.</div></div>
   </div>
-  <h3>결과의 기억: 헛친 공격은 덜 고른다</h3>
-  <div class="tbl">
-    <table>
-      <thead><tr><th>그 공격의 최근 결과</th><th>점수</th><th>회복</th></tr></thead>
-      <tbody>
-        <tr><td>한 번 헛침</td><td class="n">× 0.7</td><td>20초에 걸쳐 1로</td></tr>
-        <tr><td>연달아 두 번 이상 헛침</td><td class="n">× 0.45</td><td>20초에 걸쳐 1로</td></tr>
-        <tr><td>맞힘</td><td class="n">× 1.25</td><td>10초에 걸쳐 1로</td></tr>
-        <tr><td>막힘</td><td class="n">× 1</td><td>헛침 기록만 지운다</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p class="note">달려오기에는 기억이 없다. 공격이 계속 헛치면 공격 점수가 함께 내려가서 거리를 좁히는 쪽이 올라온다. 측정(뒤로 걷다가 벽에서는 옆으로 도는 시험용 플레이어, 90초씩 한 번): 예측과 기억을 끄면 공격 20회에 헛침 5회, 자리 잡기 포기 11회, 공격 간격 4.4초. 켜면 공격 22회에 헛침 8회, 포기 8회, 간격 3.9초. 헛침은 줄지 않았다. 이 시험에서 남은 헛침은 대부분 옆으로 움직이는 플레이어에게서 나왔고, 거리 예측은 옆 이동을 다루지 않는다.</p>
+  <p class="note">같은 생각으로 "헛친 공격은 한동안 덜 고른다"도 넣었다가 뺐다. 플레이 기록을 다시 세어 보니 헛침의 대부분은 플레이어가 회피로 피한 것이었고(공격 21회 중 헛침 15회, 그중 회피 없이 빗나간 것은 2회), 그것은 공격의 잘못이 아니었다. 효과를 숫자로 보이지 못한 규칙은 남기지 않았다.</p>
   <h3>후보 넓히기: 한 걸음이면 닿는 공격</h3>
   <div class="why">
     <div><div class="lab">플레이해서 본 문제</div><p>왼손과 오른손만 나오는 느낌이었다. 77초 한 판을 세어보니 19번 중 12번이 왼손·오른손이었고 어퍼컷은 한 번도 없었다.</p></div>
@@ -487,10 +475,10 @@ stateDiagram-v2
   <div class="why">
     <div><div class="lab">플레이해서 본 문제</div><p>보스가 한 대 치고 서 있고, 또 한 대 치고 서 있었다. 125초 판에서 공격 사이가 2 ~ 4초인 경우가 31번 중 20번이었고, 2초 안에 이어진 것은 4번뿐이었다.</p></div>
     <div><div class="lab">판단</div><p>공격을 "하나씩" 골랐기 때문이다. 정해 둔 표(왼손 다음은 어퍼컷)로 잇는 연계가 있었지만, 다음 공격이 그 자리에서 닿을 때만 이어서 회피하는 플레이어에게는 거의 나오지 않았다(125초에 1번).</p></div>
-    <div><div class="lab">한 일</div><p>고르는 단위를 "공격 하나"에서 "몰아치기 한 번"으로 바꿨다. 몇 번 칠지는 Utility가, 무엇을 어떤 순서로 이을지는 GOAP가 정한다.</p></div>
+    <div><div class="lab">한 일</div><p>고르는 단위를 "공격 하나"에서 "몰아치기 한 번"으로 바꿨다. 몇 번 칠지는 Utility AI가, 무엇을 어떤 순서로 이을지는 GOAP가 정한다.</p></div>
   </div>
   <div class="kv">
-    <div><div class="k">Utility가 정하는 것</div><div>첫 공격, 그리고 이번에 몇 번 칠지. 왼손·오른손으로 시작하면 한 번 35% / 두 번 40% / 세 번 25%. 2페이즈는 세 번이 40%. 플레이어가 최근 회피를 두 번 넘게 했으면 세 번의 몫에 15%를 더한다.</div></div>
+    <div><div class="k">Utility AI가 정하는 것</div><div>첫 공격, 그리고 이번에 몇 번 칠지. 왼손·오른손으로 시작하면 한 번 35% / 두 번 40% / 세 번 25%. 2페이즈는 세 번이 40%. 플레이어가 최근 회피를 두 번 넘게 했으면 세 번의 몫에 15%를 더한다.</div></div>
     <div><div class="k">GOAP가 짜는 것</div><div>남은 공격의 순서. 행동마다 조건(닿는 거리, 플레이어가 비낀 각도, 이번에 아직 안 쓴 공격, 쿨다운)과 결과(달려들면 붙는다, 제자리에서 치면 조금 벌어진다)가 있다. 목표는 "큰 한 방으로 끝낸다"이고, 손이 자연스럽게 이어지는 순서가 싸다.</div></div>
     <div><div class="k">다시 짠다</div><div>플레이어가 그 사이 움직이므로, 타마다 열린 후딜에서 남은 순서를 그때 상황으로 다시 짠다. 뒤로 빠졌으면 달려드는 공격으로, 옆으로 돌았으면 돌아서며 치는 공격으로 잇는다.</div></div>
     <div><div class="k">HFSM이 지키는 것</div><div>다음 타는 열린 후딜에서만 시작한다. 이어진 공격도 준비 동작을 처음부터 다 한다. 마지막 공격의 후딜은 줄이지 않고, 옆이나 뒤를 잡혀도 끝까지 보낸다.</div></div>
@@ -511,7 +499,7 @@ stateDiagram-v2
   <p class="note">조건문 표로는 "왼손 다음은 어퍼컷"까지만 쓸 수 있다. 플레이어의 위치, 남은 횟수, 쿨다운, 이미 쓴 공격을 함께 보고 끝을 큰 한 방으로 맞추는 일은 순서를 탐색해야 한다. 이것이 이 보스에서 GOAP가 맡는 일이다. 측정(시험용 플레이어, 80 ~ 90초씩): 붙어 서 있을 때 몰아치기 14번 중 두 번 잇기 4번, 세 번 잇기 1번. 계속 자리를 옮겨 피할 때 18번 중 두 번 잇기 6번.</p>
   <h3>추격: 멀어진 상대에게는 후딜을 지키지 않는다</h3>
   <div class="why">
-    <div><div class="lab">플레이해서 본 문제</div><p>중거리에서 보스가 약해 보였다. 달려들며 친 공격을 뒤로 피하면, 보스는 닿지도 않는 거리의 플레이어 앞에서 후딜을 다 보내고 서 있었다.</p></div>
+    <div><div class="lab">플레이해서 본 문제</div><p>먼 거리에서 보스가 약해 보였다. 달려들며 친 공격을 뒤로 피하면, 보스는 닿지도 않는 거리의 플레이어 앞에서 후딜을 다 보내고 서 있었다.</p></div>
     <div><div class="lab">판단</div><p>후딜은 피한 플레이어가 반격하는 시간이다. 플레이어가 반격할 수 없는 거리로 빠졌다면 그 후딜은 누구의 것도 아닌 빈 시간이다.</p></div>
     <div><div class="lab">한 일</div><p>그럴 때는 후딜을 끊고 바로 다음 행동을 고른다. 붙어서 피한 플레이어의 반격 시간은 건드리지 않는다.</p></div>
   </div>
@@ -555,10 +543,10 @@ stateDiagram-v2
     <div><b>플레이어가 방금 한 행동을 점수에 반영한다.</b><span>계속 구르면 휩쓸기가, 계속 막으면 가드 브레이크가 나와야 한 가지 대응만으로 버틸 수 없다.</span></div>
     <div><b>최근에 쓴 공격은 금지가 아니라 감점이다.</b><span>0점이 아니라서 같은 공격이 연달아 나올 수도 있다. 금지로 하면 "방금 이걸 썼으니 다음은 저거"로 순서가 읽힌다. 감점이 여러 개 걸려도 가장 큰 것 하나만 적용해서 사실상의 금지가 되지 않게 한다.</span></div>
     <div><b>연속기는 회피를 못 봤어도 낮은 점수로 후보에 둔다.</b><span>한 번만 치는 공격만 있으면 읽힌다. 전에는 회피 2회 미만이면 0점이라, 막거나 걸어서 피하는 플레이어는 단타만 봤다.</span></div>
-    <div><b>중거리에서는 달려오기보다 치면서 들어온다.</b><span>달려오기의 몫은 공격 점수 합의 15%, 플레이어가 물러나는 중이면 30%다. 처음에는 35% / 70%였는데, 직접 해보니 중거리에서 보스가 쫓아만 오고 치지 않는 구간이 생겼다.</span></div>
+    <div><b>달려오기보다 치면서 들어온다.</b><span>달려드는 공격이 셋 이상 닿으면 달려오기의 몫은 공격 점수 합의 15%, 플레이어가 물러나는 중이면 30%다. 닿는 공격이 둘이면 50%, 하나면 150%까지 남긴다. 처음에는 거리 구간으로 35% / 70%를 줬는데, 직접 해보니 보스가 쫓아만 오고 치지 않는 구간이 생겼다.</span></div>
     <div><b>물러나는 플레이어에게는 지금 자리에서 바로 닿는 공격만 고른다.</b><span>한 걸음 들어가야 하는 공격은 뺀다. 걸어서는 못 따라잡고 시간만 쓴다(실제로 8초 동안 공격을 못 한 구간이 있었다). 이럴 때는 돌진하는 슈퍼맨 펀치의 점수가 1.5배가 된다.</span></div>
     <div><b>가점은 기본 가중치의 4배까지만.</b><span>회피 가점, 맞고 있을 때의 가점, 안 쓴 가점이 겹치면 한 공격이 추첨을 독차지한다. 실제 플레이에서 휩쓸기가 15배까지 올랐다.</span></div>
-    <div><b>한 걸음이면 닿는 공격도 후보다. 다만 0.6배.</b><span>바로 칠 수 있는 공격이 먼저다. 걸음이 필요한 공격은 덜 나오되 빠지지는 않는다. 중거리 밖(650cm 이상)에서는 걸어 들어가서 치지 않고 달려온다.</span></div>
+    <div><b>한 걸음이면 닿는 공격도 후보다. 다만 0.6배.</b><span>바로 칠 수 있는 공격이 먼저다. 걸음이 필요한 공격은 덜 나오되 빠지지는 않는다. 먼 거리 밖(650cm 이상)에서는 걸어 들어가서 치지 않고 달려온다.</span></div>
     <div><b>오래 안 쓴 공격은 점수가 오른다.</b><span>감점은 "방금 쓴 것을 덜", 가점은 "안 쓴 것을 더"다. 둘이 같이 있어야 한 판 안에 모든 패턴이 나온다.</span></div>
     <div><b>실패한 공격은 잠깐 덜 고른다.</b><span>닿지 않는 공격을 연달아 시도하는 모습을 막는다.</span></div>
     <div><b>접근이 끝난 직후 1초는 왼손·오른손 점수를 1.35배로 하고, 접근은 다시 못 고른다.</b><span>다가와 놓고 또 다가오기만 하는 것을 막는다.</span></div>
@@ -577,7 +565,7 @@ stateDiagram-v2
         <tr><td>양손 휩쓸기</td><td class="n">170 ~ 360</td><td>12 → 36</td><td>4초</td><td>160</td></tr>
         <tr><td>가드 브레이크</td><td class="n">170 ~ 265</td><td>0 → 40</td><td>6초</td><td>160</td></tr>
         <tr><td>슈퍼맨 펀치</td><td class="n">400 ~ 650</td><td>20</td><td>12초</td><td>160</td></tr>
-        <tr><td>점프 내려찍기 (2페이즈)</td><td class="n">1000 ~ 5000</td><td>90</td><td>60초</td><td>220</td></tr>
+        <tr><td>점프 내려찍기 (2페이즈 전환)</td><td class="n">거리 무관</td><td>추첨하지 않음</td><td>한 번만</td><td>직격 300 · 충격파 220</td></tr>
         <tr><td>접근 (공격 아님)</td><td class="n">225 ~</td><td>70</td><td>–</td><td>–</td></tr>
       </tbody>
     </table>
@@ -616,7 +604,7 @@ stateDiagram-v2
   </div>
   <div class="rules">
     <div><b>고른 공격을 자리 잡는 도중에 다시 뽑지 않는다.</b><span>도착할 때마다 다시 뽑으면 접근만 반복하고 공격을 못 한다. GOAP는 공격 종류를 고르지 않는다.</span></div>
-    <div><b>Utility가 "한 걸음 밖의 공격"을 고르면 GOAP가 그 한 걸음을 만든다.</b><span>두 시스템이 일을 나누는 자리다. Utility는 "어퍼컷이 좋겠다"까지만 정하고, 30cm가 모자란 것은 GOAP가 해결한다.</span></div>
+    <div><b>Utility AI가 "한 걸음 밖의 공격"을 고르면 GOAP가 그 한 걸음을 만든다.</b><span>두 시스템이 일을 나누는 자리다. Utility AI는 "어퍼컷이 좋겠다"까지만 정하고, 30cm가 모자란 것은 GOAP가 해결한다.</span></div>
     <div><b>순서를 미리 짜두지 않고 매번 찾는다.</b><span>등 뒤에 있으면 "바라보기 → 접근", 멀면 "접근 → 바라보기". 상황이 바뀌어도 규칙을 새로 쓰지 않아도 된다.</span></div>
     <div><b>계획의 첫 행동만 하고 0.2초마다 다시 계획한다.</b><span>플레이어가 움직이기 때문이다.</span></div>
     <div><b>정면 길이 막히면 좌우 20° 지점으로 돌아 들어간다. 정한 지점은 옮기지 않는다.</b><span>움직이는 플레이어 옆을 계속 쫓으면 끝없이 맴돈다.</span></div>
@@ -627,20 +615,22 @@ stateDiagram-v2
   <div class="why">
     <div><div class="lab">QA에서 본 문제</div><p>플레이어가 가까이 붙으면 보스가 목석처럼 제자리에서 공격만 했다. 실전 기록을 세어보니 붙어 있는 동안 보스는 99%의 순간에 서 있었다.</p></div>
     <div><div class="lab">판단</div><p>후딜이 끝나는 바로 그 순간 다음 공격을 골랐다. 그리고 가까우면 이미 칠 수 있는 거리라서 자리를 잡을 일이 없었다. 발을 움직일 이유가 설계에 없었다.</p></div>
-    <div><div class="lab">한 일</div><p>공격과 공격 사이에 "발놀림"이라는 박자를 넣었다. 언제 할지는 확률로 정하고, 어디로 어떻게 갈지는 GOAP가 정한다.</p></div>
+    <div><div class="lab">한 일</div><p>공격과 공격 사이에 "발놀림"이라는 박자를 넣었다. 칠지 걸을지는 Utility AI가 점수로 정하고, 어떤 걸음을 어떤 순서로 디딜지는 GOAP가 정한다.</p></div>
   </div>
 
-  <p><b>언제 발을 옮기나.</b> 후딜이 끝난 순간 한 번 정한다. 발을 옮기지 않고 연달아 친 공격이 쌓일수록, 플레이어가 붙어 있을수록 확률이 오른다.</p>
+  <p><b>칠지 걸을지.</b> 후딜이 끝난 순간, 지금 칠 수 있는 공격들의 가중치 합과 세 가지 걸음의 점수를 한 표에 놓고 뽑는다. 처음에는 "공격 뒤 몇 % 확률로 걷는다"였는데, 직접 플레이한 판에서 공격 17번에 걸음이 1번뿐이었다. 연속 공격과 추격이 그 확률을 건너뛰었기 때문이다. 걷는 것을 공격과 같은 자리에서 겨루는 후보로 바꿨다.</p>
   <div class="tbl">
     <table>
-      <thead><tr><th>발을 안 옮기고 친 공격 수</th><th>주먹 거리 (200 ~ 300cm)</th><th>붙어 있을 때 (200cm 안)</th></tr></thead>
+      <thead><tr><th>걸음</th><th>점수</th><th>언제 오르나</th></tr></thead>
       <tbody>
-        <tr><td>1번</td><td class="n">25%</td><td class="n">45%</td></tr>
-        <tr><td>2번</td><td class="n">55%</td><td class="n">75%</td></tr>
-        <tr><td>3번 이상</td><td class="n">85%</td><td class="n">90%</td></tr>
+        <tr><td>둘레를 걷는다</td><td class="n">40</td><td>주먹 거리(300cm) 안에서만. 발을 옮기지 않고 연달아 칠수록 오른다(두 번째부터 +60%씩: 40 → 64 → 88)</td></tr>
+        <tr><td>걸어 들어간다</td><td class="n">45</td><td>주먹 거리 밖, 460cm 안에서만</td></tr>
+        <tr><td>빠진다</td><td class="n">25</td><td>붙어 있을 때(200cm 안)만. 최근 2초에 맞은 횟수만큼 오른다(한 번 맞았으면 50, 두 번이면 75)</td></tr>
+        <tr><td>친다</td><td class="n">합계</td><td>지금 거리에서 바로 닿고 쿨다운이 끝난 공격들의 기본 가중치 합. 가까이서는 보통 100 ~ 150</td></tr>
       </tbody>
     </table>
   </div>
+  <p class="note">"친다"가 뽑히면 어느 공격인지는 바로 이어지는 평소의 추첨이 정한다. 2페이즈에서는 걸음 점수 전체에 0.7을 곱한다. 화면 오른쪽 패널 아래에 이 판단의 점수가 한 줄로 나온다.</p>
   <p class="note">몸이 서로 닿는 거리가 약 172cm다. 200cm 안이면 "붙었다"고 본다. 플레이어가 주먹 거리 밖(300 ~ 460cm)에 있으면 친 횟수와 상관없이 50%다. 2페이즈에는 위 표의 확률에 0.7을 곱한다(덜 쉬고 더 몰아친다). 치러 걸어 들어간 경우(120cm 이상 이동)는 그것을 발놀림으로 치고 수를 0으로 되돌린다.</p>
   <div class="tbl">
     <table>
@@ -704,7 +694,7 @@ stateDiagram-v2
     <div><div class="k">걸음의 크기</div><div>뒤로: 간격 260cm 근처까지. 옆으로: 플레이어 둘레로 30 ~ 45°(매번 다르다). 걸어 들어가기: 간격 240cm까지.</div></div>
     <div><div class="k">걷는 속도</div><div>뒤로 초당 210cm, 옆으로 260cm, 걸어 들어갈 때 200cm. 달려오기(760cm)와 달리 성큼성큼 걷는다. 묵직한 복서가 거리를 조이는 걸음이다.</div></div>
     <div><div class="k">걷는 동안</div><div>몸은 계속 플레이어를 본다. 등을 보이지 않는다.</div></div>
-    <div><div class="k">간격 260cm인 이유</div><div>단거리 공격이 전부 닿는 거리다. 빠진 자리에서 모든 단거리 공격을 고를 수 있다. 빠졌다고 접근부터 다시 하지 않는다.</div></div>
+    <div><div class="k">간격 260cm인 이유</div><div>제자리 공격이 전부 닿는 거리다. 빠진 자리에서 모든 가까운 거리 공격을 고를 수 있다. 빠졌다고 접근부터 다시 하지 않는다.</div></div>
   </div>
 
   <h3>발놀림 실전 측정</h3>
@@ -738,7 +728,7 @@ stateDiagram-v2
     <div><b>"언제", "무엇을", "어떻게"를 나눴다.</b><span>언제 발을 옮길지와 무엇을 노릴지는 전투의 박자 문제라서 확률로 직접 조절한다. 어떤 걸음을 밟을지는 지형과 플레이어 위치에 달려 있어서 계획으로 찾는다.</span></div>
     <div><b>발놀림 중에는 공격을 고르지 않는다.</b><span>끝난 자리에서 새로 고른다. 걷는 사이에 플레이어가 움직였을 수 있다.</span></div>
     <div><b>발놀림 전체는 2.2초를 넘기지 않는다.</b><span>길이 막히거나 늦어지면 그 자리에서 끝내고 공격을 고른다. 걷느라 압박이 끊기면 안 된다. 플레이어가 그 사이 멀리 빠져나가도 끝낸다(그때는 달려간다).</span></div>
-    <div><b>멀리 빠지지 않는다.</b><span>Crunch는 붙어서 싸우는 복서다. 빠져도 단거리 안이고, 플레이어가 주먹 거리 밖에 있으면 오히려 걸어 들어간다.</span></div>
+    <div><b>멀리 빠지지 않는다.</b><span>Crunch는 붙어서 싸우는 복서다. 빠져도 주먹이 닿는 거리 안이고, 플레이어가 주먹 거리 밖에 있으면 오히려 걸어 들어간다.</span></div>
   </div>
 </section>
 
@@ -769,17 +759,17 @@ stateDiagram-v2
         <tr><td>잽 → 잽 → 훅</td><td class="n">235cm (훅까지)</td><td class="n">510cm까지</td><td>제자리 + 달려드는</td></tr>
         <tr><td>양손 휩쓸기</td><td class="n">약 380cm</td><td class="n">없음</td><td>제자리만</td></tr>
         <tr><td>가드 브레이크</td><td class="n">270cm</td><td class="n">없음</td><td>제자리만</td></tr>
-        <tr><td>슈퍼맨 펀치</td><td class="n">–</td><td class="n">–</td><td>중거리 (400 ~ 650cm)</td></tr>
-        <tr><td>점프 내려찍기</td><td class="n">–</td><td class="n">–</td><td>초장거리 (1000cm ~), 2페이즈</td></tr>
+        <tr><td>슈퍼맨 펀치</td><td class="n">–</td><td class="n">–</td><td>400 ~ 650cm에서만</td></tr>
+        <tr><td>점프 내려찍기</td><td class="n">–</td><td class="n">–</td><td>2페이즈가 시작될 때 한 번</td></tr>
       </tbody>
     </table>
   </div>
   <p class="note">사거리는 정지한 플레이어를 상대로 직접 잰 값이다.</p>
   <h3>실전에서 버전을 고르는 방법</h3>
-  <p>제자리 버전과 달려드는 버전은 <b>별개의 패턴</b>이다. 카드가 따로 있고 점수, 감점, 쿨다운, "안 쓴 시간"을 따로 센다. 가까이서 왼손을 방금 썼어도 중거리의 "달려들며 왼손"은 깎이지 않는다. 달려드는 패턴 안에서 가까운 쪽 / 먼 쪽 모션만 시작 거리로 고른다. 아래는 지금 실전에서 쓰는 모션과 거리 전부다.</p>
+  <p>제자리 버전과 달려드는 버전은 <b>별개의 패턴</b>이다. 카드가 따로 있고 점수, 감점, 쿨다운, "안 쓴 시간"을 따로 센다. 가까이서 왼손을 방금 썼어도 먼 거리의 "달려들며 왼손"은 깎이지 않는다. 달려드는 패턴 안에서 가까운 쪽 / 먼 쪽 모션만 시작 거리로 고른다. 아래는 지금 실전에서 쓰는 모션과 거리 전부다.</p>
   <div class="why">
-    <div><div class="lab">플레이해서 본 문제</div><p>중거리 공격이 잘 안 나왔다. 중거리에서 고른 16번 중 6번이 "접근"이었고, 접근은 190cm까지 달려와서 그 뒤로는 단거리 공격만 나왔다.</p></div>
-    <div><div class="lab">판단</div><p>달려드는 버전이 같은 카드의 "거리별 모션"일 뿐이었다. 가까이서 쓴 왼손의 감점을 중거리 왼손도 같이 받았다. 그리고 달려오기가 중거리를 지나쳐 버렸다.</p></div>
+    <div><div class="lab">플레이해서 본 문제</div><p>먼 거리 공격이 잘 안 나왔다. 먼 거리에서 고른 16번 중 6번이 "접근"이었고, 접근은 190cm까지 달려와서 그 뒤로는 가까운 거리 공격만 나왔다.</p></div>
+    <div><div class="lab">판단</div><p>달려드는 버전이 같은 카드의 "거리별 모션"일 뿐이었다. 가까이서 쓴 왼손의 감점을 먼 거리 왼손도 같이 받았다. 그리고 달려오기가 먼 거리를 지나쳐 버렸다.</p></div>
     <div><div class="lab">한 일</div><p>달려드는 버전을 별개의 패턴으로 분리했다. 달려오다가 560cm 안에 들어오면 달리기를 멈추고 다시 고른다. 달려오다 그대로 달려들며 친다.</p></div>
   </div>
   <div class="tbl">
@@ -794,10 +784,10 @@ stateDiagram-v2
       </tbody>
     </table>
   </div>
-  <p class="note">실전 측정: 900cm에서 시작하면 보스가 달려오다가 425 ~ 441cm에서 달려드는 패턴으로 친다(14번 중 13번). 전에는 190cm까지 달려와서 단거리 공격을 했다. 450cm에 선 플레이어에게는 30번 중 22번이 달려드는 패턴 또는 슈퍼맨 펀치였다.</p>
+  <p class="note">실전 측정: 900cm에서 시작하면 보스가 달려오다가 425 ~ 441cm에서 달려드는 패턴으로 친다(14번 중 13번). 전에는 190cm까지 달려와서 가까운 거리 공격을 했다. 450cm에 선 플레이어에게는 30번 중 22번이 달려드는 패턴 또는 슈퍼맨 펀치였다.</p>
   <div class="tbl">
     <table>
-      <thead><tr><th>공격</th><th>제자리 버전 (제자리)</th><th>중거리 가까운 쪽 (두 걸음)</th><th>중거리 먼 쪽 (긴 두 걸음)</th><th>고르지 않는 거리</th></tr></thead>
+      <thead><tr><th>공격</th><th>제자리 버전 (제자리)</th><th>달려드는 가까운 쪽 (두 걸음)</th><th>먼 거리 먼 쪽 (긴 두 걸음)</th><th>고르지 않는 거리</th></tr></thead>
       <tbody>
         <tr><td>왼손 휘두르기</td><td class="n">165 ~ 344cm</td><td class="n">345 ~ 499cm</td><td class="n">500 ~ 650cm</td><td>–</td></tr>
         <tr><td>오른손 휘두르기</td><td class="n">165 ~ 320cm</td><td class="n">325 ~ 509cm</td><td class="n">510 ~ 650cm</td><td class="n">321 ~ 324cm</td></tr>
@@ -812,13 +802,13 @@ stateDiagram-v2
     </table>
   </div>
   <div class="rules">
-    <div><b>공격 중에 몸을 코드로 밀지 않는다.</b><span>전에는 단거리 공격마다 "발 디딤" 구간에 몸을 앞으로 밀었다(25 ~ 145cm). 발 애니메이션에 없는 이동이라 미끄러지듯 전진했다. 전부 껐다. 몸이 앞으로 가는 것은 걸음이 들어 있는 달려드는 버전뿐이다.</span></div>
+    <div><b>공격 중에 몸을 코드로 밀지 않는다.</b><span>전에는 가까운 거리 공격마다 "발 디딤" 구간에 몸을 앞으로 밀었다(25 ~ 145cm). 발 애니메이션에 없는 이동이라 미끄러지듯 전진했다. 전부 껐다. 몸이 앞으로 가는 것은 걸음이 들어 있는 달려드는 버전뿐이다.</span></div>
     <div><b>걸음이 제대로 나오지 않는 거리에서는 그 공격을 고르지 않는다.</b><span>달려드는 버전은 걸음의 60% 이상을 실제로 걸을 수 있는 거리부터 쓴다. 그보다 가까우면 보폭만 크고 몸은 덜 가서 발이 미끄러진다. 그래서 어퍼컷은 296 ~ 367cm에서 후보에서 빠진다. 그 거리는 다른 공격이 맡는다.</span></div>
     <div><b>가까이서 시작하면 걸음을 줄이는 대신 더 붙는다.</b><span>걸음을 다 써도 190cm보다 붙지 않으면 다 쓴다. 전에는 정해둔 거리에서 멈추느라 걸음을 줄였고, 그만큼 발이 미끄러졌다.</span></div>
     <div><b>잽잽훅은 타마다 걸을지 제자리에서 칠지 정한다.</b><span>그 타가 시작될 때 걸음의 절반 이상을 걸을 수 있으면 걸어 들어가며 치고, 아니면 제자리에서 친다. 걸음 버전과 제자리 버전은 시간과 상체가 같아서 타 사이에 바꿔도 자세가 이어진다. 전에는 플레이어가 물러나지 않아도 2타와 훅이 제자리에서 걷는 동작을 했다.</span></div>
   </div>
   <div class="why">
-    <div><div class="lab">문제</div><p>가까운 쪽 버전은 왼손 523cm, 오른손 539cm까지만 닿았다. 중거리 끝(600cm)에서는 먼저 걸어 들어가야 했다.</p></div>
+    <div><div class="lab">문제</div><p>가까운 쪽 버전은 왼손 523cm, 오른손 539cm까지만 닿았다. 먼 거리 끝(600cm)에서는 먼저 걸어 들어가야 했다.</p></div>
     <div><div class="lab">판단</div><p>모션 하나를 600cm까지 늘리면 안 된다. 전진량은 거리에 맞춰 줄여 쓰는데, 긴 모션을 가까이서 줄여 쓰면 발이 그만큼 미끄러진다.</p></div>
     <div><div class="lab">한 일</div><p>먼 쪽 전용 모션을 따로 만들었다. 가까운 쪽은 그대로 두었다. 오른손은 걸음으로는 다리 길이가 모자라서, 두 발이 잠깐 함께 뜨는 도약으로 만들었다.</p></div>
   </div>
@@ -828,9 +818,9 @@ stateDiagram-v2
       <tbody>
         <tr><td>제자리 버전의 몸 이동</td><td class="n">전부 0cm (왼손, 오른손, 어퍼컷, 휩쓸기, 가드 브레이크, 2연타, 잽잽훅)</td></tr>
         <tr><td>제자리 버전이 닿는 한계</td><td class="n">왼손 344 · 오른손 320 · 어퍼컷 295 · 2연타 320 · 휩쓸기 약 380 · 가드 브레이크 270 · 잽잽훅(훅까지) 235cm</td></tr>
-        <tr><td>왼손 중거리: 345 / 500 / 600cm</td><td class="n">전부 명중. 몸 이동 155 / 274 / 274cm</td></tr>
-        <tr><td>오른손 중거리: 325 / 600cm</td><td class="n">전부 명중. 몸 이동 134 / 295cm</td></tr>
-        <tr><td>어퍼컷 중거리: 368 / 600cm</td><td class="n">전부 명중. 몸 이동 177 / 313cm</td></tr>
+        <tr><td>달려드는 왼손: 345 / 500 / 600cm</td><td class="n">전부 명중. 몸 이동 155 / 274 / 274cm</td></tr>
+        <tr><td>달려드는 오른손: 325 / 600cm</td><td class="n">전부 명중. 몸 이동 134 / 295cm</td></tr>
+        <tr><td>달려드는 어퍼컷: 368 / 600cm</td><td class="n">전부 명중. 몸 이동 177 / 313cm</td></tr>
         <tr><td>잽잽훅: 345 / 400 / 450 / 510cm</td><td class="n">전부 3타 명중. 첫 타만 걸어 들어가고(224cm까지) 2타와 훅은 제자리</td></tr>
       </tbody>
     </table>
@@ -863,8 +853,8 @@ stateDiagram-v2
     <div><b>한 번 치는 공격의 버전은 시작되는 순간의 거리로 한 번만 고른다.</b><span>도중에 바꾸지 않는다. 연속기만 타마다 걸음을 다시 정한다(위). 상체와 타격 시각은 어느 쪽이든 같아서 박자는 달라지지 않는다.</span></div>
     <div><b>제자리 버전과 달려드는 버전은 상체 공격이 같다. 하체만 다르다.</b><span>거리가 달라도 같은 공격으로 읽혀야 한다. 에셋에 상체 동작이 더 없기도 해서, 하체만 새로 만들었다.</span></div>
     <div><b>가까우면 걷고(Jog), 멀면 달린다(Sprint).</b><span>이동 속도가 초당 520cm를 넘으면 Sprint 동작으로 바뀌고 430cm 아래로 내려가면 Jog로 돌아온다. 달려오기의 최고 속도는 초당 760cm다(전에는 440cm, 동작도 Jog 하나였다). 멀리서 걸어오면 느린 복서가 아니라 굼뜬 보스가 된다. 붙으려는 의지가 보여야 한다.</span></div>
-    <div><b>거리가 벌어지면 달려와서 붙는다.</b><span>Crunch는 복서라서 원거리 공격이 없다. 이것이 약점이다. 중거리(650cm)까지는 쓸 패턴이 있지만 그보다 멀면 없다(점프 내려찍기뿐인데 쿨타임이 길고 필살기다). 그래서 멀어지면 달려와서 빠르게 붙는다. 중거리에서는 대부분 치면서 들어오고, 달려오기만 하는 것은 8번에 1번쯤이다.</span></div>
-    <div><b>슈퍼맨 펀치는 중거리의 기습이다.</b><span>400 ~ 650cm에서 돌진해 친다. "이 정도면 걸음으로는 못 온다"고 안심할 때 한 방을 날린다. 처음에는 500 ~ 1000cm였는데, 직접 플레이해 보니 그 거리에서는 보스가 달려오는 것이 더 자연스러웠다.</span></div>
+    <div><b>거리가 벌어지면 달려와서 붙는다.</b><span>Crunch는 복서라서 원거리 공격이 없다. 이것이 약점이다. 먼 거리(650cm)까지는 쓸 패턴이 있지만 그보다 멀면 없다(점프 내려찍기뿐인데 쿨타임이 길고 필살기다). 그래서 멀어지면 달려와서 빠르게 붙는다. 먼 거리에서는 대부분 치면서 들어오고, 달려오기만 하는 것은 8번에 1번쯤이다.</span></div>
+    <div><b>슈퍼맨 펀치는 먼 거리의 기습이다.</b><span>400 ~ 650cm에서 돌진해 친다. "이 정도면 걸음으로는 못 온다"고 안심할 때 한 방을 날린다. 처음에는 500 ~ 1000cm였는데, 직접 플레이해 보니 그 거리에서는 보스가 달려오는 것이 더 자연스러웠다.</span></div>
   </div>
 </section>
 
@@ -913,23 +903,77 @@ stateDiagram-v2
       </tbody>
     </table>
   </div>
-  <div class="tbl">
-    <table>
-      <thead><tr><th>2페이즈(체력 30% 아래)에서 달라지는 것</th><th>1페이즈</th><th>2페이즈</th><th>의도</th></tr></thead>
-      <tbody>
-        <tr><td>움찔의 세기</td><td class="n">1</td><td class="n">0.55</td><td>맞아도 덜 밀린다. 분노한 상대</td></tr>
-        <tr><td>도발 간격</td><td class="n">25초</td><td class="n">15초</td><td>더 자주 도발한다</td></tr>
-        <tr><td>발놀림 걸음 속도</td><td class="n">1</td><td class="n">1.15</td><td>걸음이 급해진다</td></tr>
-        <tr><td>발놀림 확률</td><td class="n">1</td><td class="n">0.7</td><td>덜 쉬고 더 몰아친다</td></tr>
-      </tbody>
-    </table>
-  </div>
   <div class="rules">
-    <div><b>연기는 판단을 바꾸지 않는다.</b><span>무엇을 고를지는 Utility, 어디로 갈지는 GOAP 그대로다. 연기를 전부 꺼도 전투의 결과는 같다.</span></div>
+    <div><b>연기는 판단을 바꾸지 않는다.</b><span>무엇을 고를지는 Utility AI, 어떤 순서로 할지는 GOAP 그대로다. 연기를 전부 꺼도 전투의 결과는 같다.</span></div>
     <div><b>후딜에는 상체만 움직인다.</b><span>발이 움직이면 반격 시간이 깨진다. 굳어 있으면 기계로 보인다. 그 사이가 시선, 헛침의 쏠림, 숨 고르기다.</span></div>
     <div><b>맞아도 공격이 끊기지 않는다.</b><span>공격이 끊기면 "먼저 때리면 이긴다"가 되어 패턴을 읽을 이유가 없어진다. 대신 맞았다는 표시는 분명히 한다.</span></div>
   </div>
   <p class="note">실전 측정(1분 15초): 멀리서 시작하자 도발 1회 뒤 달려와 공격했다. 보스가 50번 맞는 동안 움찔 50회, 몸이 밀린 최대 거리 6.8cm(약한 타격 기준). 쓰러뜨린 뒤 웃기 2회. 시선과 동작이 어울리는지는 직접 봐야 한다.</p>
+</section>
+
+<section aria-labelledby="p2-h">
+  <div class="sec-head">
+    <div class="eyebrow">체력 30% 아래</div>
+    <h2 id="p2-h">2페이즈: 과열</h2>
+  </div>
+  <div class="why">
+    <div><div class="lab">원한 경험</div><p>궁지에 몰린 보스가 더 사납게 몰아친다. 그런데 그 사나움에는 값이 있어서, 버틴 플레이어에게는 1페이즈보다 큰 틈이 온다.</p></div>
+    <div><div class="lab">필요하다고 본 것</div><p>더 세지는 것과 틈이 생기는 것이 한 가지 이유에서 나와야 한다. 따로 정하면 "왜 지금 멈추지?"가 읽히지 않는다.</p></div>
+    <div><div class="lab">한 일</div><p>열 하나로 묶었다. 보스는 과열되어 붉게 달아오르고, 칠 때마다 열이 쌓이고, 가득 차면 지쳐서 멈춘다.</p></div>
+  </div>
+  <ol class="steps">
+    <li class="pick"><b>1. 전환</b><span>30%가 되면 거리와 상관없이 점프 내려찍기를 한 번 쓴다</span></li>
+    <li class="pick"><b>2. 과열</b><span>붉어지고 열기가 난다. 연속 공격이 길어지고 빨라진다</span></li>
+    <li class="pick"><b>3. 열이 쌓인다</b><span>칠 때마다 +17%. 붉은 정도가 열이다</span></li>
+    <li class="pick"><b>4. 가득 차면 멈춘다</b><span>지쳐서 2.8초 선다. 그 뒤 열은 0으로 돌아간다</span></li>
+  </ol>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>달라지는 것</th><th>1페이즈</th><th>2페이즈</th><th>의도</th></tr></thead>
+      <tbody>
+        <tr><td>연속 공격의 횟수(왼손·오른손으로 시작)</td><td class="n">한 번 35 / 두 번 40 / 세 번 25%</td><td class="n">5 / 45 / 50%</td><td>한 대만 치고 끝내는 일이 거의 없다</td></tr>
+        <tr><td>첫 공격의 후딜</td><td class="n">원래의 70%</td><td class="n">60%</td><td>다음으로 더 빨리 넘어간다</td></tr>
+        <tr><td>추격(헛친 뒤 멀어진 상대)</td><td class="n">75%</td><td class="n">항상</td><td>물러나도 쫓아온다</td></tr>
+        <tr><td>걸음 점수</td><td class="n">1</td><td class="n">0.7</td><td>덜 걷고 더 친다</td></tr>
+        <tr><td>걸음 속도</td><td class="n">1</td><td class="n">1.15</td><td>걸음이 급해진다</td></tr>
+        <tr><td>움찔의 세기</td><td class="n">1</td><td class="n">0.55</td><td>맞아도 덜 밀린다</td></tr>
+        <tr><td>도발 간격</td><td class="n">25초</td><td class="n">15초</td><td>더 자주 도발한다</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="kv">
+    <div><div class="k">열이 쌓이고 식는 속도</div><div>공격 한 번에 17%, 공격하지 않는 동안 초당 4%씩 식는다. 대략 연속 공격 두세 번에 한 번 가득 찬다.</div></div>
+    <div><div class="k">보이는 것</div><div>몸의 붉은 빛과 가슴의 불빛이 열에 따라 밝아지고, 가득 차면 깜빡인다. 등에서는 열기가 계속 나온다. 화면 왼쪽 패널에는 열 게이지가 있다.</div></div>
+    <div><div class="k">지쳐서 멈춤</div><div>열이 가득 찬 채로 공격이 끝나면 다음 행동을 고르지 않고 2.8초 동안 비틀거리며 선다. 돌지도 않는다. 끝나면 열이 0으로 돌아간다.</div></div>
+    <div><div class="k">그로기와 다른 점</div><div>플레이어가 쌓아서 터뜨리는 것이 아니라 보스가 스스로 과열되어 멈춘다. 추가 피해도 처형도 없다. 틈의 길이만 길다.</div></div>
+    <div><div class="k">읽는 방법</div><div>붉은 정도가 곧 "얼마나 더 몰아칠 수 있나"다. 깜빡이기 시작하면 이번 연속 공격이 끝날 때 멈춘다.</div></div>
+  </div>
+  <h3>전환: 점프 내려찍기</h3>
+  <div class="why">
+    <div><div class="lab">플레이해서 본 문제</div><p>가운데의 직격을 피하기 어려웠고, 예고는 개발용 선으로 그린 원이었다. 그리고 1000cm 이상 떨어져 있을 때만 시작해서, 붙어서 싸우는 이 전투에서는 거의 나오지 않았다.</p></div>
+    <div><div class="lab">판단</div><p>떨어질 자리가 타격 0.85초 전에야 정해졌다. 직격 원의 반지름이 400cm라서, 가운데에 선 플레이어는 걸어서는 나갈 수 없었다.</p></div>
+    <div><div class="lab">한 일</div><p>자리를 더 일찍 정하고 원을 줄였다. 예고를 바닥의 표시로 다시 만들고, 2페이즈가 시작될 때 거리와 상관없이 한 번 쓰게 했다.</p></div>
+  </div>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>항목</th><th>전</th><th>후</th></tr></thead>
+      <tbody>
+        <tr><td>언제</td><td>2페이즈, 1000cm 이상일 때. 60초마다 다시</td><td>2페이즈가 시작될 때 한 번. 다시 쓰지 않는다</td></tr>
+        <tr><td>떨어질 자리가 정해지는 시각</td><td class="n">1.55초 (타격 0.85초 전)</td><td class="n">1.0초 (타격 1.4초 전)</td></tr>
+        <tr><td>직격 원의 반지름</td><td class="n">400cm</td><td class="n">320cm</td></tr>
+        <tr><td>충격파의 반지름</td><td class="n">800cm</td><td class="n">700cm</td></tr>
+        <tr><td>예고</td><td>개발용 선으로 그린 원</td><td>바닥의 붉은 원과 바깥 고리</td></tr>
+        <tr><td>착지 뒤</td><td>옆·뒤를 잡히면 일찍 끝냄</td><td>끝까지 선다(약 3.5초)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="kv">
+    <div><div class="k">붉은 원 (직격)</div><div>안에 있으면 점프해도 맞는다. 원이 안에서부터 차오르고, 다 차는 순간이 착지다. 자리가 정해지면 밝아진다. 그때부터 1.4초 동안 걸어서 나갈 수 있다(걷는 속도로 0.7초 거리).</div></div>
+    <div><div class="k">바깥 고리 (충격파)</div><div>착지 순간 그 안에 있으면 맞는다. 점프로 넘거나 밖으로 나간다. 가까이서 점프로 넘으면 착지 뒤의 긴 후딜을 바로 때릴 수 있고, 멀리 나가면 안전하지만 다시 들어와야 한다.</div></div>
+    <div><div class="k">착지</div><div>고리가 바깥으로 퍼지고 화면이 흔들린다.</div></div>
+    <div><div class="k">플레이어가 쓰러져 있으면</div><div>일어날 때까지 기다렸다가 쓴다. 한 번뿐인 공격이 대상이 없어 사라지지 않게 한다.</div></div>
+  </div>
+  <p class="note">확인한 것: 2페이즈에 들어간 뒤 300cm와 450cm에서 모두 점프가 나왔고, 바닥 표시와 퍼지는 고리, 과열 연출이 화면에 보였다. 40 ~ 70초 시험에서 지쳐서 멈춤은 1번 나왔다. 피해(직격 300, 충격파 220)는 그대로다. 걸어서 나갈 수 있는지, 점프로 넘는 타이밍이 읽히는지는 직접 해 봐야 한다.</p>
 </section>
 
 <section aria-labelledby="atk-h">
@@ -957,7 +1001,7 @@ stateDiagram-v2
     <div class="row">
       <div class="name"><h3>어퍼컷</h3></div>
       <div class="body"><ul>
-        <li><b>의도</b>: 단거리에서 패턴이 두 개뿐이면 금방 읽힌다. 패턴 수를 늘리려고 넣었다. 달려드는 버전은 "더킹하며 어퍼컷" 같은 느낌.</li>
+        <li><b>의도</b>: 가까운 거리에서 패턴이 두 개뿐이면 금방 읽힌다. 패턴 수를 늘리려고 넣었다. 달려드는 버전은 "더킹하며 어퍼컷" 같은 느낌.</li>
         <li><b>제자리 버전</b>: 왼손·오른손과 같은 읽기를 준다. 몸을 낮추며 주먹을 내리다가 점점 느려지고(멈추지는 않는다), 탕 하고 올려친다. 처음에는 낮춘 자세에서 0.24초 멈추게 했는데 굳은 것처럼 보여서, 원래 속도의 10분의 1까지만 느려지게 고쳤다. 원래 동작은 0.15초 만에 쳐서, 전에는 가만히 서서 예고만 하다가 갑자기 쳤다. 동작은 새로 만들지 않고 원래 동작의 앞부분 시간만 늘렸다. 시작에서 타격까지 0.77초(왼손 0.63초). 모으는 동안 주먹의 불꽃이 커진다.</li>
         <li><b>구현</b>: 달려드는 버전은 몸을 숙이고 두 걸음 달려든 뒤 일어나며 친다. 원래 공격이 0.15초 만에 쳐서 달려들 시간이 없으므로 앞에 0.55초 진입을 붙였다.</li>
       </ul></div>
@@ -967,7 +1011,7 @@ stateDiagram-v2
       <div class="body"><ul>
         <li><b>의도</b>: 옆으로 휘두르는 공격과 올려치는 공격만 있으면 피하는 방법이 같아진다. 위에서 내려오는 공격을 하나 넣었다. 가장 느리고 가장 아프다(140).</li>
         <li><b>구현</b>: Crunch가 원래 가진 네 번째 콤보 동작이다. 쓰지 않던 것을 꺼냈다. 대기 자세에서 팔을 뒤로 당기는 진입(0.45초)을 앞에 붙였고, 내려치는 부분은 원본 그대로다. 시작에서 타격까지 약 1초.</li>
-        <li><b>쓰임</b>: 단거리 전용(165 ~ 285cm), 쿨다운 6초. 오른손 휘두르기 뒤의 연계로도 나온다. 팔을 당기는 동안 오른 주먹에 불이 붙어 커지고, 내려치는 순간 터진다(어퍼컷의 왼 주먹과 같은 표시).</li>
+        <li><b>쓰임</b>: 제자리 전용(165 ~ 285cm), 쿨다운 6초. 오른손 휘두르기 뒤의 연계로도 나온다. 팔을 당기는 동안 오른 주먹에 불이 붙어 커지고, 내려치는 순간 터진다(어퍼컷의 왼 주먹과 같은 표시).</li>
       </ul></div>
     </div>
     <div class="row">
@@ -980,11 +1024,11 @@ stateDiagram-v2
     </div>
     <div class="row">
       <div class="name"><h3>양손 휩쓸기</h3></div>
-      <div class="body"><ul><li><b>의도</b>: 애매하게 회피하는 플레이어를 잡는다. 넓게 휘두르므로 등 뒤로 돌아간 플레이어도 잡는다.</li><li><b>구현</b>: 단거리 전용. 평소에는 드물고(가중치 12), 최근 회피를 2회 이상 보면 3배가 된다. 뒤쪽 대응으로도 쓴다.</li></ul></div>
+      <div class="body"><ul><li><b>의도</b>: 애매하게 회피하는 플레이어를 잡는다. 넓게 휘두르므로 등 뒤로 돌아간 플레이어도 잡는다.</li><li><b>구현</b>: 가까운 거리 전용. 평소에는 드물고(가중치 12), 최근 회피를 2회 이상 보면 3배가 된다. 뒤쪽 대응으로도 쓴다.</li></ul></div>
     </div>
     <div class="row">
       <div class="name"><h3>가드 브레이크</h3></div>
-      <div class="body"><ul><li><b>의도</b>: 가드만 하는 플레이어에 대응한다(가드 스팸 방지). 가드는 멀리서 하지 않으므로 단거리 전용이다.</li><li><b>구현</b>: 플레이어가 최근에 가드했으면 더 자주 고른다. 플레이어 쪽 가드 수치는 아직 맞추지 않았다.</li></ul></div>
+      <div class="body"><ul><li><b>의도</b>: 가드만 하는 플레이어에 대응한다(가드 스팸 방지). 가드는 멀리서 하지 않으므로 가까운 거리 전용이다.</li><li><b>구현</b>: 플레이어가 최근에 가드했으면 더 자주 고른다. 플레이어 쪽 가드 수치는 아직 맞추지 않았다.</li></ul></div>
     </div>
     <div class="row">
       <div class="name"><h3>슈퍼맨 펀치</h3></div>
@@ -992,7 +1036,7 @@ stateDiagram-v2
     </div>
     <div class="row">
       <div class="name"><h3>점프 내려찍기</h3></div>
-      <div class="body"><ul><li><b>의도</b>: 체력이 30% 아래로 내려갔을 때 나오는 필살기 느낌.</li><li><b>구현</b>: 2페이즈, 1000cm 이상에서만 고른다. 쿨다운 60초.</li></ul></div>
+      <div class="body"><ul><li><b>의도</b>: 체력이 30% 아래로 내려갔을 때 나오는 필살기 느낌.</li><li><b>구현</b>: 2페이즈가 시작될 때 거리와 상관없이 한 번 쓴다. 다시 쓰지 않는다. 자세한 것은 "2페이즈: 과열".</li></ul></div>
     </div>
   </div>
 </section>
@@ -1003,8 +1047,8 @@ stateDiagram-v2
     <h2 id="qa-h">해보니 이상했던 것과 고친 방법</h2>
   </div>
   <div class="why">
-    <div><div class="lab">문제</div><p>중거리에서 보스가 계속 추격만 했다.</p></div>
-    <div><div class="lab">판단</div><p>중거리에서 쓸 공격이 없었다.</p></div>
+    <div><div class="lab">문제</div><p>먼 거리에서 보스가 계속 추격만 했다.</p></div>
+    <div><div class="lab">판단</div><p>먼 거리에서 쓸 공격이 없었다.</p></div>
     <div><div class="lab">한 일</div><p>왼손·오른손·어퍼컷·연속기에 달려드는 버전을 만들었다.</p></div>
   </div>
   <div class="why">
@@ -1040,11 +1084,11 @@ stateDiagram-v2
   <div class="why">
     <div><div class="lab">문제</div><p>조금만 떨어지면 왼손과 오른손만 계속 나왔다.</p></div>
     <div><div class="lab">판단</div><p>나머지 공격은 285cm까지만 후보였고, 만들어 둔 달려드는 버전은 시험 맵에서만 나오고 있었다.</p></div>
-    <div><div class="lab">한 일</div><p>실전에서 시작 거리에 따라 달려드는 버전이 나오게 하고, 어퍼컷과 연속기도 중거리 끝(600cm)까지 후보에 넣었다. 600cm에서 바로 닿도록 먼 쪽 전용 모션도 만들었다. 휩쓸기와 가드 브레이크의 거리도 잰 사거리에 맞춰 넓혔다.</p></div>
+    <div><div class="lab">한 일</div><p>실전에서 시작 거리에 따라 달려드는 버전이 나오게 하고, 어퍼컷과 연속기도 먼 거리 끝(600cm)까지 후보에 넣었다. 600cm에서 바로 닿도록 먼 쪽 전용 모션도 만들었다. 휩쓸기와 가드 브레이크의 거리도 잰 사거리에 맞춰 넓혔다.</p></div>
   </div>
   <div class="why">
     <div><div class="lab">문제</div><p>보스가 미끄러지듯 전진하며 공격했다.</p></div>
-    <div><div class="lab">판단</div><p>원인이 셋이었다. 단거리 공격마다 몸을 코드로 밀고 있었고, 달려드는 버전을 가까이서 쓰면 걸음을 줄여 썼고, 연속기는 뒤의 두 타가 제자리에서 걷는 동작을 했다.</p></div>
+    <div><div class="lab">판단</div><p>원인이 셋이었다. 가까운 거리 공격마다 몸을 코드로 밀고 있었고, 달려드는 버전을 가까이서 쓰면 걸음을 줄여 썼고, 연속기는 뒤의 두 타가 제자리에서 걷는 동작을 했다.</p></div>
     <div><div class="lab">한 일</div><p>몸을 미는 것을 전부 껐다. 걸음이 제대로 나오는 거리에서만 달려드는 버전을 고르고, 가까우면 걸음을 줄이는 대신 더 붙는다. 연속기는 타마다 걸을지 제자리에서 칠지 정한다.</p></div>
   </div>
   <div class="why">
@@ -1064,6 +1108,7 @@ stateDiagram-v2
     <div><b>플레이어가 반격할 수 있는 거리에 있으면, 후딜의 앞쪽 60%에는 보스가 발을 옮기지 않는다(연계 제외).</b><span>패턴을 피한 플레이어에게 반격 시간을 보장한다.</span></div>
     <div><b>제자리 턴에서 몸은 발이 디디는 만큼만 돈다.</b><span>플레이해 보니 보스가 발을 둔 채 스르륵 미끄러지며 돌아봤다. 턴 동작은 앞쪽 0.9초 동안만 발을 옮기고 나머지는 자세를 고르는데, 몸은 일정한 속도로 끝까지 돌리고 있었다. 이제 동작 안에 들어 있는 "남은 각도" 값을 따라 몸을 돌리고, 다 돌면 남은 동작은 기다리지 않고 끝낸다. 180° 턴이 약 1.8초에서 1.1초가 됐다.</span></div>
     <div><b>공격을 준비하는 동안 제자리에서는 25°까지만 돈다.</b><span>발을 둔 채 몸만 플레이어를 끝까지 따라 돌면 미끄러지듯 도는 것으로 보인다. 넘으면 방향이 고정되고, 옆으로 피한 플레이어는 맞지 않는다. 크게 돌아야 할 때는 걸으면서 돌거나 돌아서며 치는 공격을 쓴다.</span></div>
+    <div><b>2페이즈의 사나움과 틈은 같은 열에서 나온다.</b><span>더 길게 몰아치는 만큼 열이 쌓이고, 가득 차면 멈춘다. 세지기만 하면 버티는 것이 벌이 되고, 틈만 주면 2페이즈가 쉬워진다.</span></div>
     <div><b>몰아치기는 세 번까지이고, 끝에는 평소보다 긴 후딜이 온다. 그 후딜은 옆이나 뒤를 잡혀도 끊기지 않는다.</b><span>저돌적으로 몰아치되 끝까지 피한 쪽은 반드시 보상받는다. 끝이 없으면 피하는 것이 버티기일 뿐이다.</span></div>
     <div><b>전진량은 걸음이 시작될 때 한 번만 정한다.</b><span>도중에 계속 쫓아가면 물러나서 피할 방법이 없어진다.</span></div>
     <div><b>고른 공격을 자리 잡는 도중에 다시 뽑지 않는다.</b><span>접근만 반복하고 공격을 못 하는 문제가 다시 생긴다.</span></div>

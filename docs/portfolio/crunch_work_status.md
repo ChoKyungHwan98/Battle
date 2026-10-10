@@ -276,3 +276,18 @@
 - **회피 실루엣**: `BP_Player_Combat.SpawnDodgeGhost` 함수의 시작 실행 핀을 끊음(호출부 3곳은 그대로, 함수가 아무것도 하지 않는다). 완벽 회피의 다른 처리(스태미나 환급 등)는 그대로.
 - 두 블루프린트 컴파일 오류 0, 저장. 시작 화면 캡처로 패널과 글자가 없는 것을 확인. 실루엣은 시험으로 완벽 회피를 만들 수 없어 화면으로는 확인하지 못했다.
 - 콘솔 `boss.Panel 2`(예전 패널 보기)는 이제 동작하지 않는다.
+
+## 2026-10-10 오후: 마지막 작업 묶음 — 2페이즈 과열, 점프 내려찍기, 걸음을 점수로, 정리, 기획서 재정리
+사용자 지시: 화면 문구를 시스템 이름만으로("지금 무엇을 하고 있나" 같은 말투는 뺀다) / 점프는 30%에서 거리와 상관없이 한 번, 재사용 없음, 충격파는 점프로 피하기 유지, 피해 유지, 착지 뒤에 때릴 수 있게 / 2페이즈는 연기·붉어짐, 연속 공격을 빠르게 계속, 가끔 지치는 동작 / 정리와 기획서 재정리 필요 / HFSM·Utility AI·GOAP는 맡긴다.
+- **화면 문구**: HFSM / 연속 공격(`2 / 3  왼손 → 오른손`) / GOAP / UTILITY AI. 용어는 Utility AI로 통일(게임 AI에서 쓰는 이름).
+- **전수조사**: 보스 블루프린트 그래프 65개·노드 2,249개, C++ 컴포넌트 약 3,400줄·조절값 69개, 둘 사이를 이름으로 읽고 쓰는 곳 약 160군데. 블루프린트가 고른 뒤 C++이 고쳐 쓰는 구조("뇌가 둘")는 그대로 두었다(지금 다시 짜기에는 크다).
+- **걸음을 점수로**(`MovementScores`, `ReachableAttackWeight`, `CircleScore` 40 / `PressScore` 45 / `SpaceScore` 25): `TryFootwork`가 확률 대신 "친다(닿는 공격의 가중치 합) / 둘레 / 조이기 / 빠지기"를 한 표에서 뽑는다. 화면 오른쪽 패널 아래에 그 점수 한 줄(`MoveLine`). `FootworkChance`, `ChooseFootworkWants`, `PressChance` 삭제.
+- **2페이즈 과열**(`UpdateOverheat`, `TryVent`, `Heat`): 붉은 오버레이(`M_Crunch_GuardBodyAura` 동적 인스턴스, 세기 0.9~3.2 + 가득 차면 맥박), 가슴의 붉은 점광원(6,000~45,000), 등 소켓에 `P_Crunch_JetFX_Stage_1` 둘과 `P_Crunch_Heat_Distortion`. 공격 한 번에 열 +0.17, 초당 0.04 식음. 열 ≥ 1에서 공격이 끝나면 `Stunned_Loop`로 `VentSeconds` 2.8초 정지(돌지 않음), 끝나면 열 0. 패널에 열 게이지.
+  2페이즈 수치: 연속 공격 두 번 45% / 세 번 50%(`PhaseTwoStringTwoShare`, `PhaseTwoStringThreeShare`), 첫 공격 후딜 0.6(`PhaseTwoRecoveryScale`).
+- **점프 내려찍기**: `CanStartPendingSlam`의 최소 거리 1000 → 0, 플레이어가 쓰러져 있으면 대기(전에는 "대상 없음"으로 거부되고 한 번뿐인 점프가 사라졌다 — 시험에서 실제로 재현됨). 카드 `DA_Attack_JumpSlam`: MinDistance 0, BaseWeight 0(추첨으로는 안 나옴 = 재사용 없음).
+  실행 중 덮어쓰기: `SlamTrackUntilSeconds` 1.55 → 1.0, `SlamDirectRadius` 400 → 320, `SlamShockRadius` 800 → 700. 피해는 그대로(직격 300, 충격파 220 — 블루프린트 값).
+  예고(`UpdateSlam`, 재질 `/Game/BossArena/Boss/Effects/M_SlamTelegraph` 새로 만듦: 데칼, Progress·Fill·Opacity·Color): 붉은 원이 차오르고 자리가 정해지면 밝아짐, 바깥 고리, 착지 때 퍼지는 고리 + 화면 흔들림. 데칼이 캐릭터 몸에 입혀지지 않게 함. 블루프린트 `UpdateSlamMotion`의 디버그 원 그리기는 실행 핀을 끊음. 착지 후딜은 옆·뒤를 잡혀도 끝까지.
+- **정리**: 결과의 기억(`OutcomeScale` 등, `boss.OutcomeMemory`), 후딜 중 제자리 회전(`RecoveryTurnSpeed`, `RecoveryTurnStart`), 예전 패널 숨기기 코드와 `boss.Panel 2` 삭제. 남긴 것: 예측, 공격 전 옆걸음(확률 0, 코드가 자리 잡기와 얽혀 있어 이번에는 못 뺌), 모션랩.
+- **실측**: 2페이즈 시나리오(`TestBossSprint.phase_two_scenario`) 300cm·450cm 모두 점프 발동(`slam_telegraph`, `slam_wave`), 과열 시작, 지쳐서 멈춤 1회(70초), 연속 공격 2타 5~6회 / 3타 1회. 자동 시험 20개 통과. 캡처: `docs/portfolio/slam_telegraph_20261010.png`, `overheat_20261010.png`.
+- **하지 않은 것**: 가까운 거리 공격에 한 걸음 넣는 새 동작(200~345cm용). 동작을 새로 만들어야 하고 화면으로 검수할 수 없어서 마지막 묶음에 넣지 않았다. 목석 문제의 근본 원인(공격 상태가 시간의 약 70%이고 그동안 제자리)은 이것이 있어야 풀린다. 4타째 동작(`Ability_Combo_04`)도 아직 공격이 아니다.
+- **사용자 QA가 필요한 것**: 과열의 불·열기 이펙트가 과하지 않은지(화면 위쪽까지 퍼짐), "연기"로 보이는지(프로젝트에 연기 파티클이 없어 분사·열기 이펙트를 썼다), 지치는 동작(`Stunned_Loop`), 점프의 직격 원을 걸어서 나갈 수 있는지와 충격파를 점프로 넘는 타이밍, 걸음이 실제로 늘었는지.

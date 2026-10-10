@@ -296,6 +296,29 @@ def start_scenario():
     return {'name': 'Start screen', 'dependencies': ['Tools/TestBossSprint.py', 'Tools/TestDonorPunch.py'], 'steps': steps, 'teardown': {'stop_pie': True}}
 
 
+def to_phase_two():
+    """Bring the boss just under 30% health, as if the player had fought it down."""
+    w, b, p = fixture.actors()
+    hp, mx = float(b.get_editor_property('CurrentHealth')), float(b.get_editor_property('MaxHealth'))
+    unreal.GameplayStatics.apply_damage(b, max(0., hp - mx * .28), None, None, unreal.DamageType)
+    for _ in range(4): heal()
+    return 1
+
+
+def phase_two_scenario(seconds=70, distance=300):
+    """Phase two from the first frame of the change: the one-time jump slam (with screenshots of its telegraph), then overheat and venting."""
+    m = "__import__('TestBossSprint')"
+    call = lambda e: {'action': 'python_assert_number', 'expression': f'{m}.{e}', 'operator': 'eq', 'expected': 1}
+    steps = [{'action': 'start_pie'}, {'action': 'wait_for_pie', 'timeout_seconds': 30}, {'action': 'wait', 'seconds': 8.}, call(f'begin({distance})'),
+             {'action': 'wait', 'seconds': 2.5}, call('to_phase_two()')]
+    for wait in (1.2, .6, .6, .6, .6, .6, .6, .6, .6, .6, .6, .6):          # the slam starts when the current action ends: shoot a spread of moments
+        steps += [{'action': 'wait', 'seconds': wait}, call('shot_only()')]
+    for _ in range(int(seconds // 1.5)):
+        steps += [{'action': 'wait', 'seconds': 1.5}, call('heal()')]
+    steps += [call('shot_only()'), {'action': 'wait', 'seconds': .5}, call('finish()')]
+    return {'name': 'Phase two', 'dependencies': ['Tools/TestBossSprint.py', 'Tools/TestDonorPunch.py'], 'steps': steps, 'teardown': {'stop_pie': True}}
+
+
 def poke():
     """Hit the boss lightly (to exercise the flinch) and keep the player alive."""
     w, b, p = fixture.actors()
