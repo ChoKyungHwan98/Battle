@@ -2537,7 +2537,7 @@ void UBossCombatIntentComponent::UpdateAIPanel()
     for (const int32 Id : StringUsed) Names += (Names.IsEmpty() ? TEXT("") : TEXT(" → ")) + FString(ShortAttackLabel(Id));
     AIPanel->StringDone = StringUsed.Num();
     AIPanel->StringWanted = FMath::Max(StringHitsWanted, StringUsed.Num());
-    AIPanel->StringText = FText::FromString(Names);
+    AIPanel->StringText = FText::FromString(FString::Printf(TEXT("%d / %d   %s"), StringUsed.Num(), FMath::Max(StringHitsWanted, StringUsed.Num()), *Names));
     AIPanel->Plan = FText::FromString(Text(Boss, TEXT("GoapReason")));
     const AActor* Player = UGameplayStatics::GetPlayerPawn(this, 0);
     if (IsValid(Player))

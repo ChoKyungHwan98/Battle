@@ -56,7 +56,7 @@ int32 SBossAIPanel::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeo
         Box(Origin, FVector2f(Width, Height), Back, 0);
         Box(Origin, FVector2f(3.f, Height), State, 1);
         FVector2f At = Origin + FVector2f(Pad, Pad);
-        Text(FText::FromString(TEXT("HFSM   지금 무엇을 하고 있나")), HeadFont, At, State);
+        Text(FText::FromString(TEXT("HFSM")), HeadFont, At, State);
         At.Y += Small * 1.9f;
         // 단계 여섯 칸. 지금 칸만 채운다. 타격은 붉게, 닫힌 후딜(플레이어의 반격 시간)은 가장 밝게.
         static const TCHAR* Names[] = {TEXT("선택"), TEXT("이동"), TEXT("준비"), TEXT("타격"), TEXT("후딜 닫힘"), TEXT("후딜 열림")};
@@ -78,7 +78,7 @@ int32 SBossAIPanel::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeo
         Text(Fit(Reason, BodyFont, Inner), BodyFont, At, Ink);
         At.Y += Line + Pad * .3f;
         // 이번 몰아치기: 치려는 수만큼 칸, 친 만큼 채운다.
-        Text(FText::FromString(TEXT("몰아치기   이번에 몇 번 치나")), HeadFont, At, State);
+        Text(FText::FromString(TEXT("연속 공격")), HeadFont, At, State);
         At.Y += Small * 1.9f;
         const float Pip = Body * .95f;
         for (int32 I = 0; I < FMath::Clamp(StringWanted, 1, 3); ++I)
@@ -86,7 +86,7 @@ int32 SBossAIPanel::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeo
         const float PipsWidth = 3.f * (Pip + 5.f) + 6.f;
         Text(Fit(StringText, BodyFont, Inner - PipsWidth), BodyFont, At + FVector2f(PipsWidth, 0.f), Ink);
         At.Y += Line + Pad * .3f;
-        Text(FText::FromString(TEXT("GOAP   어떻게 할 것인가")), HeadFont, At, Goap);
+        Text(FText::FromString(TEXT("GOAP")), HeadFont, At, Goap);
         At.Y += Small * 1.9f;
         Text(Fit(Plan, BodyFont, Inner), BodyFont, At, Ink);
     }
@@ -100,7 +100,7 @@ int32 SBossAIPanel::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeo
         Box(Origin, FVector2f(Width, Height), Back, 0);
         Box(Origin + FVector2f(Width - 3.f, 0.f), FVector2f(3.f, Height), Utility, 1);
         FVector2f At = Origin + FVector2f(Pad, Pad);
-        Text(FText::FromString(TEXT("UTILITY   무엇을 고를 것인가")), HeadFont, At, Utility);
+        Text(FText::FromString(TEXT("UTILITY AI")), HeadFont, At, Utility);
         At.Y += Small * 1.9f;
         Text(Fit(Distance, BodyFont, Inner), BodyFont, At, Dim);
         At.Y += Line * 1.15f;

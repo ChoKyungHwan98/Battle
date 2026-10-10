@@ -3,10 +3,11 @@
 #include "Widgets/SLeafWidget.h"
 
 /**
- * 보스 AI를 처음 보는 사람이 한눈에 읽는 화면 표시. 세 시스템을 질문 하나씩으로 나눠 보여준다.
- *   왼쪽  HFSM   "지금 무엇을 하고 있나"  : 단계 여섯 칸 중 지금 칸, 이번 몰아치기의 진행
- *                GOAP   "어떻게 할 것인가"     : 지금의 계획 한 줄
- *   오른쪽 Utility "무엇을 고를 것인가"     : 마지막 판단의 후보와 점수 막대, 뽑힌 것
+ * 보스 AI를 처음 보는 사람이 읽는 화면 표시. 시스템 이름만 제목으로 쓴다.
+ *   왼쪽  HFSM       : 단계 여섯 칸 중 지금 칸과 그 이유
+ *         연속 공격   : 이번에 치려는 횟수와 친 횟수, 친 공격의 이름
+ *         GOAP       : 지금의 계획 한 줄
+ *   오른쪽 UTILITY AI : 마지막 판단의 후보와 점수 막대, 뽑힌 것
  */
 class BATTLEBOSSPLANNING_API SBossAIPanel : public SLeafWidget
 {
