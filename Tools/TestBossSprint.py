@@ -38,7 +38,11 @@ def begin(distance=1200.):
             'mesh': list(b.get_component_by_class(unreal.SkeletalMeshComponent).get_editor_property('relative_location').to_tuple()),
             'look': (b.get_controller().get_control_rotation().yaw - b.get_actor_rotation().yaw + 180.) % 360. - 180. if b.get_controller() else 0.,
             'pitch': (b.get_controller().get_control_rotation().pitch + 180.) % 360. - 180. if b.get_controller() else 0.,
-            'abp_pitch': float(anim.get_editor_property('Pitch'))})
+            'abp_pitch': float(anim.get_editor_property('Pitch')),
+            'mode': str(b.get_component_by_class(unreal.CharacterMovementComponent).get_editor_property('movement_mode')),
+            'max_speed': float(b.get_component_by_class(unreal.CharacterMovementComponent).get_editor_property('max_walk_speed')),
+            'legs_free': bool(anim.get_editor_property('LegsFree')), 'full_body': bool(anim.get_editor_property('FullBody')),
+            'accel': b.get_component_by_class(unreal.CharacterMovementComponent).get_current_acceleration().length()})
     OBSERVER = unreal.register_slate_post_tick_callback(sample)
     return 1
 
@@ -317,6 +321,29 @@ def phase_two_scenario(seconds=70, distance=300):
         steps += [{'action': 'wait', 'seconds': 1.5}, call('heal()')]
     steps += [call('shot_only()'), {'action': 'wait', 'seconds': .5}, call('finish()')]
     return {'name': 'Phase two', 'dependencies': ['Tools/TestBossSprint.py', 'Tools/TestDonorPunch.py'], 'steps': steps, 'teardown': {'stop_pie': True}}
+
+
+SWINGS = 0
+
+
+def fake_swing():
+    """Mark the player as having just started an attack (the boss watches this value), without moving them."""
+    w, b, p = fixture.actors()
+    global SWINGS
+    SWINGS += 1
+    unreal.SystemLibrary.execute_console_command(w, f'boss.FakeSwing {SWINGS}')
+    for _ in range(4): heal()
+    return 1
+
+
+def react_scenario(seconds=40, every=.7):
+    m = "__import__('TestBossSprint')"
+    call = lambda e: {'action': 'python_assert_number', 'expression': f'{m}.{e}', 'operator': 'eq', 'expected': 1}
+    steps = [{'action': 'start_pie'}, {'action': 'wait_for_pie', 'timeout_seconds': 30}, {'action': 'wait', 'seconds': 8.}, call('begin(260)')]
+    for _ in range(int(seconds // every)):
+        steps += [{'action': 'wait', 'seconds': every}, call('fake_swing()')]
+    steps += [call('finish()')]
+    return {'name': 'Boss reacting to player swings', 'dependencies': ['Tools/TestBossSprint.py', 'Tools/TestDonorPunch.py'], 'steps': steps, 'teardown': {'stop_pie': True}}
 
 
 def poke():

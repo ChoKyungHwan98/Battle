@@ -165,6 +165,21 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Footwork") float SwayDuckPitch = 14.f;
     /** 공격을 준비하는 동안 제자리에서 플레이어 쪽으로 돌 수 있는 각도. 넘으면 방향이 고정된다(옆으로 피하면 빗나간다). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Turn") float WindupTurnLimit = 25.f;
+    // ---- 공격 안에서 움직이기 ----
+    /** 준비 동작 동안 걸어서 간격을 맞춘다: 이보다 멀면 들어가고, 이보다 가까우면 뺀다. 타격 AttackStepStopBefore초 전에는 발을 멈춘다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Attack Movement") float AttackStepFar = 235.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Attack Movement") float AttackStepNear = 185.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Attack Movement") float AttackStepSpeed = 230.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Attack Movement") float AttackStepStopBefore = .22f;
+    /** 후딜의 뒷부분(열린 후딜)에 이어 칠 것이 없으면 한 발 물러서며 자세를 잡는다. 속도와 최대 시간. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Attack Movement") float RecoveryStepSpeed = 130.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Attack Movement") float RecoveryStepSeconds = .55f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Attack Movement") float RecoveryStepDistance = 240.f;
+    // ---- 플레이어의 공격에 반응하기 ----
+    /** 서 있거나 걷는 중에 플레이어가 공격을 시작하면 이 확률로 상체를 젖히며 빠진다(후딜 중에는 하지 않는다). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Reaction") float ReactChance = .5f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Reaction") float ReactCooldown = 5.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Reaction") float ReactDistance = 330.f;
     // ---- 플레이어의 가드 ----
     /** 저스트 가드: 맞기 직전 이 시간 안에 올린 가드는 피해를 받지 않는다(보통 가드는 20%를 받는다). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Guard Reward") float JustGuardWindow = .25f;
@@ -232,6 +247,16 @@ private:
     bool TryFacingStep();
     bool bFacingStep = false;        // 지금 기동이 "각 맞추는 걸음"인가
     bool bSwayBack = false;          // 지금 기동이 "숙이며 빠지기"인가
+    bool StartSwayBack(const FString& Reason, const TCHAR* Event);
+    void UpdateAttackMovement(float DeltaTime);
+    void UpdateReaction();
+    bool bAttackStepping = false;    // 지금 공격 상태 안에서 걷는 중인가(다리는 걷는 동작, 상체는 공격 동작)
+    bool bAttackStepLogged = false;
+    float AttackStepSpeedBefore = 0.f;
+    uint8 RootModeBefore = 255;
+    float RecoveryStepLeft = 0.f;
+    double LastPlayerAttackStart = -1.0;
+    double NextReactAt = 0.0;
     void UpdateWindupTurn();
     float WindupStartYaw = 0.f;
     bool bWindupTracked = false;

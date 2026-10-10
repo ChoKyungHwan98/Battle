@@ -774,34 +774,8 @@ void UBossCombatIntentComponent::TryFootwork()
     if (!FootworkAllowed(Distance, Dot, FootworkMaxDistance, static_cast<float>(Number(Boss, TEXT("RecentGuardSeconds"))))) return;
     const bool bCrowded = Distance < CrowdDistance;
     // 숙이며 빠지기: 붙어서 맞고 있으면 걸음 대신 상체를 숙이고 빠르게 뒤로 빠진다. 묵직하지만 굼뜨지는 않다.
-    if (Distance < ComfortDistance && HitsTakenWithin(2.f) >= SwayHits && FMath::FRand() < SwayChance)
-    {
-        const FVector Floor = BossLocation - FVector(0, 0, Boss->GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
-        if (NavOpen(this, Floor, Floor - Delta.GetSafeNormal2D() * 180.f)
-            && TransitionState(Boss, TEXT("Boss.Combat.Ready"), TEXT("Boss.Combat.Position"), TEXT("숙이며 빠지기")))
-        {
-            if (AAIController* Controller = Cast<AAIController>(Boss->GetController())) Controller->StopMovement();
-            FootworkLegs.Reset();
-            FootworkLegs.Add(static_cast<uint8>(EBossPositionAction::StepBack));
-            bFootworkActive = bSwayBack = true;
-            FootworkLegIndex = 0;
-            FootworkStartedAt = GetWorld()->GetTimeSeconds();
-            FootworkSpeedBefore = Boss->GetCharacterMovement()->MaxWalkSpeed;
-            AttackStreak = 0;
-            BowVelocity -= BowKick(SwayDuckPitch);
-            SetFlag(Boss, TEXT("bPostAttackProbePending"), false);
-            PostAttackDecisionUntil = 0;
-            SetNumber(Boss, TEXT("UtilityAction"), 0);
-            SetFlag(Boss, TEXT("bAttackIntentActive"), true);
-            Status = TEXT("맞고 있다: 숙이며 뒤로 빠진다");
-            SetText(Boss, TEXT("IntentPhase"), TEXT("footwork"));
-            SetText(Boss, TEXT("IntentReason"), Status);
-            SetText(Boss, TEXT("GoapReason"), Status);
-            Invoke(Boss, TEXT("RecordCombatQA"), TEXT("sway_back"));
-            BeginFootworkLeg();
-            return;
-        }
-    }
+    if (Distance < ComfortDistance && HitsTakenWithin(2.f) >= SwayHits && FMath::FRand() < SwayChance
+        && StartSwayBack(TEXT("맞고 있다: 숙이며 뒤로 빠진다"), TEXT("sway_back"))) return;
     // 칠지 걸을지: 지금 칠 수 있는 공격들의 가중치 합과 세 가지 걸음의 점수를 한 표에 놓고 뽑는다(Utility AI의 첫 판단).
     // 공격이 뽑히면 여기서는 아무것도 하지 않고, 어느 공격인지는 바로 이어지는 평소의 추첨이 정한다.
     float Move[3];
@@ -874,6 +848,147 @@ void UBossCombatIntentComponent::TryFootwork()
     Invoke(Boss, TEXT("RecordCombatQA"), Wants.bPocket ? TEXT("footwork_press")
         : (Wants.bAngle ? TEXT("footwork_angle") : TEXT("footwork_space")));
     BeginFootworkLeg();
+}
+
+// 상체를 숙이며 뒤로 빠르게 빠진다. Ready에서만 시작한다.
+bool UBossCombatIntentComponent::StartSwayBack(const FString& Reason, const TCHAR* Event)
+{
+    ACharacter* Boss = Cast<ACharacter>(GetOwner());
+    const AActor* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+    if (!Boss || !IsValid(Player) || bFootworkActive || bActive || bReassessing || !StateIs(Boss, TEXT("Boss.Combat.Ready"))) return false;
+    const FVector Away = (Boss->GetActorLocation() - Player->GetActorLocation()).GetSafeNormal2D();
+    const FVector Floor = Boss->GetActorLocation() - FVector(0, 0, Boss->GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+    if (!NavOpen(this, Floor, Floor + Away * 180.f)) return false;
+    if (!TransitionState(Boss, TEXT("Boss.Combat.Ready"), TEXT("Boss.Combat.Position"), TEXT("숙이며 빠지기"))) return false;
+    if (AAIController* Controller = Cast<AAIController>(Boss->GetController())) Controller->StopMovement();
+    FootworkLegs.Reset();
+    FootworkLegs.Add(static_cast<uint8>(EBossPositionAction::StepBack));
+    bFootworkActive = bSwayBack = true;
+    FootworkLegIndex = 0;
+    FootworkStartedAt = GetWorld()->GetTimeSeconds();
+    FootworkSpeedBefore = Boss->GetCharacterMovement()->MaxWalkSpeed;
+    AttackStreak = 0;
+    BowVelocity -= BowKick(SwayDuckPitch);
+    SetFlag(Boss, TEXT("bPostAttackProbePending"), false);
+    PostAttackDecisionUntil = 0;
+    SetNumber(Boss, TEXT("UtilityAction"), 0);
+    SetFlag(Boss, TEXT("bAttackIntentActive"), true);
+    Status = Reason;
+    SetText(Boss, TEXT("IntentPhase"), TEXT("footwork"));
+    SetText(Boss, TEXT("IntentReason"), Reason);
+    SetText(Boss, TEXT("GoapReason"), Reason);
+    Invoke(Boss, TEXT("RecordCombatQA"), Event);
+    BeginFootworkLeg();
+    return true;
+}
+
+namespace
+{
+// 시험용: 값을 바꾸면 "플레이어가 방금 공격을 시작했다"로 본다(자동 시험은 플레이어의 입력을 넣을 수 없다).
+int32 FakeSwing = 0;
+FAutoConsoleVariableRef CVarFakeSwing(TEXT("boss.FakeSwing"), FakeSwing, TEXT("Change the value to make the boss see a player attack starting (test only)."));
+int32 FakeSwingSeen = 0;
+}
+
+// ---- 플레이어의 공격에 반응하기 ----------------------------------------------------------------------------------------
+// 보스의 판단은 후딜이 끝날 때만 일어났다. 그 사이 플레이어가 무엇을 해도 보스는 반응하지 않아서, "내가 한 것에 반응했다"는 순간이 없었다.
+// 서 있거나 걷는 중에 플레이어가 공격을 시작하면, 가끔 상체를 젖히며 뒤로 빠진다. 빠진 자리에서 평소처럼 고르므로 대개 맞받아치게 된다.
+// 공격 중과 후딜 중에는 하지 않는다: 플레이어의 반격 시간은 그대로다.
+void UBossCombatIntentComponent::UpdateReaction()
+{
+    ACharacter* Boss = Cast<ACharacter>(GetOwner());
+    const AActor* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+    if (!Boss || !IsValid(Player) || !GetWorld()) return;
+    const double Started = Number(Player, TEXT("AttackStartTime"), -1.0);
+    const bool bNewAttack = (LastPlayerAttackStart >= 0.0 && Started > LastPlayerAttackStart + .001) || FakeSwing != FakeSwingSeen;
+    LastPlayerAttackStart = Started;
+    FakeSwingSeen = FakeSwing;
+    const double Now = GetWorld()->GetTimeSeconds();
+    if (!bNewAttack || Now < NextReactAt || GetWorld()->GetMapName().Contains(TEXT("Lvl_BossMotionLab"))) return;
+    if (Number(Boss, TEXT("CurrentHealth")) <= 0 || bPerforming || bActive || bReassessing || bSwayBack || bFacingStep) return;
+    const bool bWalking = bFootworkActive && StateIs(Boss, TEXT("Boss.Combat.Position"));
+    if (!bWalking && !StateIs(Boss, TEXT("Boss.Combat.Ready"))) return;
+    const FVector Delta = Player->GetActorLocation() - Boss->GetActorLocation();
+    if (Delta.Size2D() > ReactDistance || FVector::DotProduct(Boss->GetActorForwardVector(), Delta.GetSafeNormal2D()) < .3f) return;
+    if (FMath::FRand() >= ReactChance) return;
+    if (bWalking) EndFootwork(true, TEXT("플레이어의 공격을 봤다"));
+    if (StartSwayBack(TEXT("플레이어의 공격을 보고 상체를 젖히며 빠진다"), TEXT("react_sway")))
+        NextReactAt = Now + ReactCooldown * (Flag(Boss, TEXT("bPhaseTwo")) ? .7f : 1.f);
+}
+
+// ---- 공격 안에서 움직이기 ----------------------------------------------------------------------------------------------
+// 실제 플레이 기록: 공격 상태(예고·준비·타격·후딜)가 시간의 약 70%였고 그동안 발이 멈춰 있었다. 움직이려면 공격 상태를 나가야 했다.
+// 이제 공격 상태 안에서 걷는다. 다리는 걷는 동작, 상체는 공격 동작을 재생한다(애니메이션 그래프의 "다리 풀기" 스위치).
+//   준비 동작: 간격이 멀면 들어가고 너무 가까우면 뺀다. 타격 직전에는 발을 멈춰서, 치는 순간에는 디딘 자세다.
+//   열린 후딜: 이어 칠 것이 없으면 한 발 물러서며 자세를 잡는다. 닫힌 후딜과 몰아치기의 마지막 후딜에는 움직이지 않는다.
+// 몸을 코드로 미는 것이 아니다: 캐릭터가 실제로 걷고, 다리 애니메이션이 그 속도를 따른다.
+void UBossCombatIntentComponent::UpdateAttackMovement(float DeltaTime)
+{
+    ACharacter* Boss = Cast<ACharacter>(GetOwner());
+    UAnimInstance* Anim = Boss && Boss->GetMesh() ? Boss->GetMesh()->GetAnimInstance() : nullptr;
+    UCharacterMovementComponent* Movement = Boss ? Boss->GetCharacterMovement() : nullptr;
+    if (!Anim || !Movement || !GetWorld()) return;
+    const auto Release = [&]()
+    {
+        if (!bAttackStepping) return;
+        bAttackStepping = false;
+        SetFlag(Anim, TEXT("LegsFree"), false);
+        Movement->MaxWalkSpeed = AttackStepSpeedBefore;
+        if (RootModeBefore != 255) Anim->SetRootMotionMode(static_cast<ERootMotionMode::Type>(RootModeBefore));
+        RootModeBefore = 255;
+    };
+    const AActor* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+    const bool bPreparing = StateIs(Boss, TEXT("Boss.Combat.Attack.Telegraph")) || StateIs(Boss, TEXT("Boss.Combat.Attack.Windup"));
+    const bool bRecovery = StateIs(Boss, TEXT("Boss.Combat.Attack.Recovery"));
+    if (!bRecovery) RecoveryStepLeft = RecoveryStepSeconds;
+    if (!bPreparing && !bRecovery) bAttackStepLogged = false;
+    if (!IsValid(Player) || Number(Boss, TEXT("CurrentHealth")) <= 0 || Number(Player, TEXT("CurrentHealth"), 1) <= 0 || Flag(Player, TEXT("bKnockedDown"))
+        || GetWorld()->GetMapName().Contains(TEXT("Lvl_BossMotionLab")) || (!bPreparing && !bRecovery)) { Release(); return; }
+    const UObject* Card = Object(Boss, TEXT("ActiveAction"));
+    const int32 Id = static_cast<int32>(Number(Card, TEXT("ActionId"), -1));
+    const UAnimMontage* Montage = Anim->GetCurrentActiveMontage();
+    // 제자리에서 한 번 치는 공격만: 달려드는 공격은 제 걸음이 있고, 연속기는 타마다 걸음을 따로 정한다. 돌아서며 치는 중에도 하지 않는다.
+    const bool bPlanted = (Id == 0 || Id == 1 || Id == 2 || Id == 3 || Id == OverheadId) && Montage && !Montage->GetName().Contains(TEXT("RunIn")) && !bRearResponseActive;
+    const FVector To = Player->GetActorLocation() - Boss->GetActorLocation();
+    const float Distance = To.Size2D();
+    const FVector Toward = To.GetSafeNormal2D();
+    FVector Want = FVector::ZeroVector;
+    float Speed = 0.f;
+    if (bPlanted && bPreparing)
+    {
+        const float Elapsed = static_cast<float>(GetWorld()->GetTimeSeconds() - Number(Boss, TEXT("AttackStartedAt")));
+        if (Elapsed >= 0.f && Elapsed < FirstImpactSeconds(Card) - AttackStepStopBefore)
+        {
+            if (Distance > AttackStepFar) Want = Toward;
+            else if (Distance < AttackStepNear) Want = -Toward;
+            Speed = AttackStepSpeed;
+        }
+    }
+    else if (bPlanted && bRecovery && bRecoveryOpen && ChainSlot == INDEX_NONE && !bLinkWanted && !bPursuitWanted && ChainDepth == 0
+        && Distance < RecoveryStepDistance && RecoveryStepLeft > 0.f)
+    {
+        Want = -Toward;
+        Speed = RecoveryStepSpeed;
+        RecoveryStepLeft -= DeltaTime;
+    }
+    if (!Want.IsZero())
+    {
+        const FVector Floor = Boss->GetActorLocation() - FVector(0, 0, Boss->GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+        if (!NavOpen(this, Floor, Floor + Want * 70.f)) Want = FVector::ZeroVector;
+    }
+    if (Want.IsZero()) { Release(); return; }
+    if (!bAttackStepping)
+    {
+        bAttackStepping = true;
+        AttackStepSpeedBefore = Movement->MaxWalkSpeed;
+        // 제자리 공격의 동작에는 이동이 없다. 동작의 루트 이동을 쓰는 설정이면 걷기 입력이 무시되므로 이 공격 동안만 끈다.
+        RootModeBefore = static_cast<uint8>(Anim->RootMotionMode.GetValue());
+        Anim->SetRootMotionMode(ERootMotionMode::IgnoreRootMotion);
+        SetFlag(Anim, TEXT("LegsFree"), true);
+        if (!bAttackStepLogged) { bAttackStepLogged = true; Invoke(Boss, TEXT("RecordCombatQA"), bPreparing ? TEXT("windup_step") : TEXT("recovery_step")); }
+    }
+    Movement->MaxWalkSpeed = Speed * (Flag(Boss, TEXT("bPhaseTwo")) ? PhaseTwoStepSpeedScale : 1.f);
+    Boss->AddMovementInput(Want, 1.f);
 }
 
 void UBossCombatIntentComponent::BeginFootworkLeg()
@@ -2181,6 +2296,8 @@ void UBossCombatIntentComponent::TickComponent(float DeltaTime, ELevelTick TickT
     UpdateComboStages();
     UpdateTravelScale();
     UpdateWhiff();
+    UpdateAttackMovement(DeltaTime);
+    UpdateReaction();
     UpdateWindupTurn();
     UpdateRecoveryTurn(DeltaTime);
     UpdateRearResponse(DeltaTime);
