@@ -20,6 +20,8 @@ public:
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     bool IsActive() const { return bActive || bReassessing || bFootworkActive || bPerforming; }
     float FailureMultiplier(int32 Slot) const;
+    /** 이번 판단에서 몰아치려 하는가. 판단 번호가 바뀔 때 한 번 정하고, 그 판단의 모든 후보가 같은 답을 본다. */
+    bool WantsString(int32 DecisionNumber, bool bPhaseTwo) const;
     /** 지금 거리에서 바로 칠 수 있는 공격들의 기본 가중치 합. "칠지 걸을지"를 정할 때 공격 쪽의 점수로 쓴다. */
     float ReachableAttackWeight(float Distance) const;
     /** 화면 표시용: 마지막 "칠지 걸을지" 판단의 점수 한 줄. */
@@ -114,6 +116,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Acting") float PhaseTwoStepSpeedScale = 1.15f;
     /** 연계: 공격 뒤에 후딜을 끊고 정해진 다음 공격으로 잇는 확률(1페이즈 / 2페이즈)과, 후딜의 어느 지점에서 잇는지. */
     /** 이어 치기: 왼손·오른손으로 시작했을 때 두 번 / 세 번까지 이을 몫(나머지는 한 번만 친다). */
+    /** 몰아치려는 의도: 판단마다 이 확률로 "이번에는 몰아친다"를 정한다(1페이즈 / 2페이즈). 그러면 몰아치기를 여는 공격(왼손·오른손)의 점수가 StringOpenerBoost배가 된다. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float StringIntentChance = .55f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float PhaseTwoStringIntentChance = .9f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float StringOpenerBoost = 2.5f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float StringTwoShare = .4f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float StringThreeShare = .25f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float PhaseTwoStringThreeShare = .5f;
@@ -126,6 +132,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Overheat") float HeatCoolPerSecond = .04f;
     /** 지쳐서 멈추는 시간(초). 플레이어가 크게 때릴 수 있는 틈이다. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Overheat") float VentSeconds = 2.8f;
+    /** 김의 양(초당 뭉치 수): 2페이즈 기본, 열이 가득 찼을 때 더해지는 양, 지쳐서 멈췄을 때. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Overheat") float SteamBaseRate = 18.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Overheat") float SteamHeatRate = 26.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Overheat") float SteamBurstRate = 70.f;
     /** 플레이어가 최근 회피를 두 번 넘게 했으면 세 번까지 이을 몫에 더한다(한 번 피하고 들어오는 것을 잡는다). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float DodgeStringBonus = .15f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boss|Chain") float ChainStartFraction = .35f;
@@ -202,6 +212,8 @@ private:
     void UpdateChain(float Elapsed, float Remaining);
     bool RequestSlot(int32 SlotIndex);
     void AddExtraCards();
+    mutable int32 StringIntentDecision = -1;
+    mutable bool bStringIntent = false;
     bool bLinkWanted = false;        // 이번 후딜에서 다음 타로 이으려 하는가(열린 후딜에서 한 번 계획한다)
     bool bStringEndLogged = false;
     bool bLinkPivot = false;         // 이을 공격이 돌아서며 치는 것인가(정면 조건을 건너뛰고 준비 동작 동안 돈다)
@@ -257,6 +269,20 @@ private:
     UPROPERTY(Transient) TArray<TObjectPtr<UParticleSystemComponent>> HeatFX;
     UPROPERTY(Transient) TObjectPtr<UParticleSystemComponent> VentFX;
     UPROPERTY(Transient) TObjectPtr<class UPointLightComponent> HeatLight;
+    // 김: 몸 여러 곳에서 피어오르는 뭉치들. 열이 높을수록, 지쳐서 멈춘 동안에는 훨씬 많이 나온다.
+    void UpdateSteam(float DeltaTime, bool bHot, bool bBurst);
+    struct FSteamPuff { FVector Location = FVector::ZeroVector; FVector Velocity = FVector::ZeroVector; float Age = 0.f; float Life = 0.f; float StartSize = 0.f; float EndSize = 0.f; float Peak = 0.f; bool bAlive = false; };
+    TArray<FSteamPuff> SteamPuffs;
+    UPROPERTY(Transient) TArray<TObjectPtr<class UMaterialBillboardComponent>> SteamSprites;
+    UPROPERTY(Transient) TArray<TObjectPtr<class UMaterialInstanceDynamic>> SteamMaterials;
+    float SteamDebt = 0.f;
+    // 지친 동작: 비틀거리기 시작하는 동작 뒤에 비틀거리는 동작을 이어 붙인다. 점프 착지 뒤에도 쓴다.
+    void PlayExhausted(float Seconds);
+    void UpdateExhausted();
+    double ExhaustLoopAt = -1.0;
+    double ExhaustUntil = -1.0;
+    UPROPERTY(Transient) TObjectPtr<class UAnimMontage> ExhaustMontage;
+    double SlamStunAt = -1.0;
     UPROPERTY(Transient) TObjectPtr<class UDecalComponent> SlamDirectDecal;
     UPROPERTY(Transient) TObjectPtr<class UDecalComponent> SlamShockDecal;
     UPROPERTY(Transient) TObjectPtr<class UDecalComponent> SlamWaveDecal;

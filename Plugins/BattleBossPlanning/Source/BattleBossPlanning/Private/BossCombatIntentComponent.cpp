@@ -28,6 +28,7 @@
 #include "BossAIPanelWidget.h"
 #include "Components/DecalComponent.h"
 #include "Components/PointLightComponent.h"
+#include "Components/MaterialBillboardComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include <limits>
 
@@ -1734,8 +1735,12 @@ void UBossCombatIntentComponent::UpdateWhiff()
             StringUsed.Reset();
             const bool bPhaseTwo = Flag(Boss, TEXT("bPhaseTwo"));
             const bool bLab = GetWorld() && GetWorld()->GetMapName().Contains(TEXT("Lvl_BossMotionLab"));
-            StringHitsWanted = bLab ? 1 : ChooseStringLength(Id, FMath::FRand(), bPhaseTwo ? PhaseTwoStringTwoShare : StringTwoShare,
-                (bPhaseTwo ? PhaseTwoStringThreeShare : StringThreeShare) + (Dodges >= 2.0 ? DodgeStringBonus : 0.f));
+            // 몰아치려던 판단에서 여는 공격이 뽑혔으면 두 번이나 세 번(몫의 비율대로). 그런 의도가 없었으면 한 번만 친다.
+            const float Two = bPhaseTwo ? PhaseTwoStringTwoShare : StringTwoShare;
+            const float Three = (bPhaseTwo ? PhaseTwoStringThreeShare : StringThreeShare) + (Dodges >= 2.0 ? DodgeStringBonus : 0.f);
+            const bool bOpener = Id == 0 || Id == 1;
+            StringHitsWanted = bLab ? 1 : (bOpener ? (bStringIntent ? (FMath::FRand() < Three / FMath::Max(.01f, Two + Three) ? 3 : 2) : 1)
+                : ChooseStringLength(Id, FMath::FRand(), Two, Three));
         }
         StringUsed.Add(Id);
         if (Flag(Boss, TEXT("bPhaseTwo")) && Id != 8) Heat = FMath::Min(1.2f, Heat + HeatPerAttack);      // 과열: 칠 때마다 열이 쌓인다
@@ -2089,7 +2094,9 @@ void UBossCombatIntentComponent::UpdateRecoveryTurn(float DeltaTime)
         const bool bLab = GetWorld()->GetMapName().Contains(TEXT("Lvl_BossMotionLab"));
         const bool bPhaseTwo = Flag(Boss, TEXT("bPhaseTwo"));
         bLinkWanted = !bLab && StringUsed.Num() < StringHitsWanted;
-        bPursuitWanted = !bLab && FMath::FRand() < ChainLinkChance(bPhaseTwo ? PhaseTwoPursuitChance : PursuitChance, ChainDepth);
+        // 점프 내려찍기의 착지는 쫓지 않고 끝까지 선다(실제 플레이에서 추격이 착지 후딜을 1초로 끊었다).
+        bPursuitWanted = !bLab && static_cast<int32>(Number(Object(Boss, TEXT("ActiveAction")), TEXT("ActionId"), -1)) != 8
+            && FMath::FRand() < ChainLinkChance(bPhaseTwo ? PhaseTwoPursuitChance : PursuitChance, ChainDepth);
         // 헛침: 닿지 않았으면 상체가 앞으로 쏠렸다 돌아오고 몸이 조금 딸려 나간다. 맞혔을 때의 후딜과 달라 보인다.
         const AActor* Dodger = UGameplayStatics::GetPlayerPawn(this, 0);
         bWhiffed = !bLab && !bAttackConnected && IsValid(Dodger) && Number(Dodger, TEXT("CurrentHealth"), 1) > 0 && !Flag(Dodger, TEXT("bKnockedDown"));
@@ -2103,7 +2110,10 @@ void UBossCombatIntentComponent::UpdateRecoveryTurn(float DeltaTime)
         }
         // 후딜 줄이기: 남은 후딜 시간과 그동안의 동작을 같은 비율로 줄인다(동작이 잘리지 않고 빨리 끝난다).
         const float Left = UKismetSystemLibrary::K2_GetTimerRemainingTime(Boss, TEXT("FinishCombatAction"));
-        const float Scale = RecoveryScaleFor(bLab ? 0 : ChainDepth, bPhaseTwo ? PhaseTwoRecoveryScale : RecoveryScale, EnderRecoveryScale);
+        // 점프 내려찍기의 착지는 앞에 무엇이 있었든 같은 길이로 선다(원래의 70%, 약 3.4초).
+        const bool bSlamLanding = static_cast<int32>(Number(Object(Boss, TEXT("ActiveAction")), TEXT("ActionId"), -1)) == 8;
+        const float Scale = bSlamLanding ? FMath::Clamp(RecoveryScale, .3f, 1.f)
+            : RecoveryScaleFor(bLab ? 0 : ChainDepth, bPhaseTwo ? PhaseTwoRecoveryScale : RecoveryScale, EnderRecoveryScale);
         if (Left > 0.f && Scale < 1.f)
         {
             UKismetSystemLibrary::K2_SetTimer(Boss, TEXT("FinishCombatAction"), Left * Scale, false);
@@ -2228,12 +2238,26 @@ void UBossCombatIntentComponent::EndPlay(const EEndPlayReason::Type Reason)
     for (UParticleSystemComponent* FX : HeatFX) if (FX) FX->DestroyComponent();
     HeatFX.Reset();
     if (VentFX) { VentFX->DestroyComponent(); VentFX = nullptr; }
+    for (UMaterialBillboardComponent* Sprite : SteamSprites) if (Sprite) Sprite->DestroyComponent();
+    SteamSprites.Reset(); SteamMaterials.Reset(); SteamPuffs.Reset();
     if (AIPanel.IsValid())
     {
         if (UGameViewportClient* Viewport = GetWorld() ? GetWorld()->GetGameViewport() : nullptr) Viewport->RemoveViewportWidgetContent(AIPanel.ToSharedRef());
         AIPanel.Reset();
     }
     Super::EndPlay(Reason);
+}
+
+// 몰아치려는 의도. 실제 플레이 기록: 몰아치기를 여는 공격(왼손·오른손)이 전체의 30%뿐이어서, 공격 34번에 몰아치기는 4번이었다.
+// "몇 번 칠지"를 첫 공격을 고른 뒤에 정했기 때문이다. 순서를 바꿨다: 먼저 몰아칠지를 정하고, 그렇다면 여는 공격의 점수를 올린다.
+bool UBossCombatIntentComponent::WantsString(int32 DecisionNumber, bool bPhaseTwo) const
+{
+    if (DecisionNumber != StringIntentDecision)
+    {
+        StringIntentDecision = DecisionNumber;
+        bStringIntent = FMath::FRand() < (bPhaseTwo ? PhaseTwoStringIntentChance : StringIntentChance);
+    }
+    return bStringIntent;
 }
 
 float UBossCombatIntentComponent::PlayerSpeedAway() const
@@ -2401,6 +2425,9 @@ float UBossCombatIntentLibrary::AdjustIntentCandidate(AActor* Boss, int32 Candid
     {
         Score *= PressureBoost(ActionId, Intent->HitsTakenWithin(4.f), static_cast<float>(Distance));
         Score *= Intent->FailureMultiplier(CandidateSlot);
+        // 몰아치려는 판단이면 여는 공격(왼손·오른손, 제자리든 달려들든)을 올린다.
+        if ((ActionId == 0 || ActionId == 1) && Intent->WantsString(static_cast<int32>(Number(Boss, TEXT("UtilityDecisionCount"))), Flag(Boss, TEXT("bPhaseTwo"))))
+            Score *= Intent->StringOpenerBoost;
     }
     // 가점이 여러 개 겹쳐도 기본 가중치의 4배까지만. 한 공격이 추첨을 독차지하지 않게 한다(실제 플레이에서 휩쓸기가 15배까지 올랐다).
     return FMath::Min(Score, 4.f * static_cast<float>(Number(Card, TEXT("BaseWeight"))));
@@ -2517,6 +2544,112 @@ float UBossCombatIntentComponent::ReachableAttackWeight(float Distance) const
     return Total;
 }
 
+// ---- 김 ------------------------------------------------------------------------------------------------------------
+// 프로젝트에 김·연기 파티클이 없어서 직접 만든다: 화면을 향하는 부드러운 뭉치를 몸의 여러 곳에서 띄워 올리고, 커지면서 흐려지게 한다.
+void UBossCombatIntentComponent::UpdateSteam(float DeltaTime, bool bHot, bool bBurst)
+{
+    ACharacter* Boss = Cast<ACharacter>(GetOwner());
+    USkeletalMeshComponent* Mesh = Boss ? Boss->GetMesh() : nullptr;
+    if (!Mesh) return;
+    constexpr int32 PoolSize = 72;
+    if (SteamSprites.IsEmpty())
+    {
+        UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/BossArena/Boss/Effects/M_OverheatSteam.M_OverheatSteam"), nullptr, LOAD_NoWarn);
+        if (!Base) return;
+        SteamPuffs.SetNum(PoolSize);
+        for (int32 I = 0; I < PoolSize; ++I)
+        {
+            UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(Base, this);
+            UMaterialBillboardComponent* Sprite = NewObject<UMaterialBillboardComponent>(Boss);
+            Sprite->SetUsingAbsoluteLocation(true);
+            Sprite->SetUsingAbsoluteRotation(true);
+            Sprite->SetUsingAbsoluteScale(true);
+            Sprite->SetCastShadow(false);
+            Sprite->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+            Sprite->RegisterComponent();
+            Sprite->AddElement(Material, nullptr, false, 10.f, 10.f, nullptr);
+            Sprite->SetVisibility(false);
+            Material->SetScalarParameterValue(TEXT("Seed"), FMath::FRand() * 7.f);
+            SteamSprites.Add(Sprite);
+            SteamMaterials.Add(Material);
+        }
+    }
+    // 새 뭉치: 등의 증기구와 분사구, 어깨, 팔꿈치, 머리에서. 지쳐서 멈춘 동안에는 크고 빠르게 많이.
+    static const FName Sources[] = {TEXT("FX_UltSteam_Back"), TEXT("FX_BackJet_l"), TEXT("FX_BackJet_r"), TEXT("upperarm_l"), TEXT("upperarm_r"),
+        TEXT("lowerarm_l"), TEXT("lowerarm_r"), TEXT("FX_Head"), TEXT("Chest")};
+    const float Rate = !bHot ? 0.f : (bBurst ? SteamBurstRate : SteamBaseRate + SteamHeatRate * FMath::Clamp(Heat, 0.f, 1.f));
+    SteamDebt = FMath::Min(SteamDebt + Rate * DeltaTime, 8.f);
+    for (int32 I = 0; I < SteamPuffs.Num() && SteamDebt >= 1.f; ++I)
+    {
+        FSteamPuff& Puff = SteamPuffs[I];
+        if (Puff.bAlive) continue;
+        SteamDebt -= 1.f;
+        Puff.bAlive = true;
+        Puff.Age = 0.f;
+        Puff.Life = FMath::FRandRange(1.1f, 1.9f) * (bBurst ? 1.25f : 1.f);
+        Puff.Location = Mesh->GetSocketLocation(Sources[FMath::RandHelper(UE_ARRAY_COUNT(Sources))]) + FMath::VRand() * 14.f;
+        Puff.Velocity = FVector(FMath::FRandRange(-45.f, 45.f), FMath::FRandRange(-45.f, 45.f), FMath::FRandRange(110.f, 190.f)) * (bBurst ? 1.5f : 1.f);
+        Puff.StartSize = FMath::FRandRange(30.f, 55.f) * (bBurst ? 1.5f : 1.f);
+        Puff.EndSize = Puff.StartSize * FMath::FRandRange(3.2f, 4.6f);
+        Puff.Peak = FMath::FRandRange(.5f, .8f) * (bBurst ? 1.3f : 1.f);
+        SteamSprites[I]->SetVisibility(true);
+    }
+    for (int32 I = 0; I < SteamPuffs.Num(); ++I)
+    {
+        FSteamPuff& Puff = SteamPuffs[I];
+        if (!Puff.bAlive) continue;
+        Puff.Age += DeltaTime;
+        if (Puff.Age >= Puff.Life) { Puff.bAlive = false; SteamSprites[I]->SetVisibility(false); continue; }
+        const float T = Puff.Age / Puff.Life;
+        Puff.Velocity *= FMath::Max(0.f, 1.f - .9f * DeltaTime);       // 올라가며 느려진다
+        Puff.Location += Puff.Velocity * DeltaTime;
+        const float Size = FMath::Lerp(Puff.StartSize, Puff.EndSize, FMath::Sqrt(T));
+        UMaterialBillboardComponent* Sprite = SteamSprites[I];
+        Sprite->SetWorldLocation(Puff.Location);
+        if (Sprite->Elements.Num()) { Sprite->Elements[0].BaseSizeX = Size; Sprite->Elements[0].BaseSizeY = Size; Sprite->MarkRenderStateDirty(); }
+        // 0.15 구간에 걸쳐 나타나고, 나머지 동안 흐려진다.
+        SteamMaterials[I]->SetScalarParameterValue(TEXT("Opacity"), Puff.Peak * FMath::Min(1.f, T / .15f) * (1.f - T) * (1.f - T) * 1.6f);
+    }
+}
+
+// 지친 동작: Stunned_Start(비틀거리기 시작) 뒤에 Stunned_Loop(비틀거림)를 이어서 Seconds 동안 재생한다.
+void UBossCombatIntentComponent::PlayExhausted(float Seconds)
+{
+    ACharacter* Boss = Cast<ACharacter>(GetOwner());
+    UAnimInstance* Anim = Boss && Boss->GetMesh() ? Boss->GetMesh()->GetAnimInstance() : nullptr;
+    UAnimSequenceBase* Start = LoadObject<UAnimSequenceBase>(nullptr,
+        TEXT("/Game/ParagonCrunch/Characters/Heroes/Crunch/Animations/Stunned_Start.Stunned_Start"), nullptr, LOAD_NoWarn);
+    if (!Anim || !Start || !GetWorld()) return;
+    const double Now = GetWorld()->GetTimeSeconds();
+    ExhaustMontage = Anim->PlaySlotAnimationAsDynamicMontage(Start, ActingSlot, .25f, .2f, 1.f, 1, -1.f, 0.f);
+    ExhaustLoopAt = Now + FMath::Max(.3f, Start->GetPlayLength() - .22f);
+    ExhaustUntil = Now + Seconds;
+}
+
+void UBossCombatIntentComponent::UpdateExhausted()
+{
+    if (ExhaustUntil < 0.0 || !GetWorld()) return;
+    ACharacter* Boss = Cast<ACharacter>(GetOwner());
+    UAnimInstance* Anim = Boss && Boss->GetMesh() ? Boss->GetMesh()->GetAnimInstance() : nullptr;
+    if (!Anim) return;
+    const double Now = GetWorld()->GetTimeSeconds();
+    if (ExhaustLoopAt >= 0.0 && Now >= ExhaustLoopAt && Now < ExhaustUntil)
+    {
+        ExhaustLoopAt = -1.0;
+        if (UAnimSequenceBase* Loop = LoadObject<UAnimSequenceBase>(nullptr,
+            TEXT("/Game/ParagonCrunch/Characters/Heroes/Crunch/Animations/Stunned_Loop.Stunned_Loop"), nullptr, LOAD_NoWarn))
+            ExhaustMontage = Anim->PlaySlotAnimationAsDynamicMontage(Loop, ActingSlot, .2f, .35f, 1.f, 8, -1.f, 0.f);
+    }
+    // 시간이 다 됐거나 다른 행동이 시작됐으면(상태가 바뀜) 끝낸다.
+    const bool bStillResting = bVenting || StateIs(Boss, TEXT("Boss.Combat.Attack.Recovery"));
+    if (Now >= ExhaustUntil || !bStillResting || Number(Boss, TEXT("CurrentHealth")) <= 0)
+    {
+        if (ExhaustMontage && Anim->Montage_IsPlaying(ExhaustMontage)) Anim->Montage_Stop(.3f, ExhaustMontage);
+        ExhaustMontage = nullptr;
+        ExhaustUntil = ExhaustLoopAt = -1.0;
+    }
+}
+
 // ---- 2페이즈: 과열 ------------------------------------------------------------------------------------------------
 // 체력 30% 아래에서 보스는 과열된다. 몸이 붉어지고 등에서 열기가 나온다. 연속 공격을 더 길게, 더 빨리 잇는다.
 // 대신 칠 때마다 열이 쌓이고, 가득 찬 채로 몰아치기가 끝나면 지쳐서 멈춘다. 붉은 정도가 곧 "얼마나 더 몰아칠 수 있나"다:
@@ -2528,6 +2661,8 @@ void UBossCombatIntentComponent::UpdateOverheat(float DeltaTime)
     USkeletalMeshComponent* Mesh = Boss ? Boss->GetMesh() : nullptr;
     if (!Mesh || !GetWorld() || GetWorld()->GetMapName().Contains(TEXT("Lvl_BossMotionLab"))) return;
     const bool bHot = Flag(Boss, TEXT("bPhaseTwo")) && Number(Boss, TEXT("CurrentHealth")) > 0;
+    UpdateExhausted();
+    UpdateSteam(DeltaTime, bHot, bVenting || ExhaustUntil >= 0.0);
     if (!bHot)
     {
         if (HeatOverlay && Mesh->GetOverlayMaterial() == HeatOverlay.Get()) Mesh->SetOverlayMaterial(nullptr);
@@ -2572,22 +2707,23 @@ void UBossCombatIntentComponent::UpdateOverheat(float DeltaTime)
                 HeatFX.Add(UGameplayStatics::SpawnEmitterAttached(FX, Mesh, Socket, FVector::ZeroVector, FRotator::ZeroRotator, FVector(Scale),
                     EAttachLocation::KeepRelativeOffset, false));
         };
-        Attach(TEXT("/Game/ParagonCrunch/FX/Particles/Abilities/Ultimate/FX/P_Crunch_JetFX_Stage_1.P_Crunch_JetFX_Stage_1"), TEXT("FX_BackJet_l"), 1.f);
-        Attach(TEXT("/Game/ParagonCrunch/FX/Particles/Abilities/Ultimate/FX/P_Crunch_JetFX_Stage_1.P_Crunch_JetFX_Stage_1"), TEXT("FX_BackJet_r"), 1.f);
-        Attach(TEXT("/Game/ParagonCrunch/FX/Particles/Abilities/Ultimate/FX/P_Crunch_Heat_Distortion.P_Crunch_Heat_Distortion"), TEXT("FX_UltSteam_Back"), 1.2f);
+        Attach(TEXT("/Game/ParagonCrunch/FX/Particles/Abilities/Ultimate/FX/P_Crunch_JetFX_Stage_1.P_Crunch_JetFX_Stage_1"), TEXT("FX_BackJet_l"), 1.5f);
+        Attach(TEXT("/Game/ParagonCrunch/FX/Particles/Abilities/Ultimate/FX/P_Crunch_JetFX_Stage_1.P_Crunch_JetFX_Stage_1"), TEXT("FX_BackJet_r"), 1.5f);
+        Attach(TEXT("/Game/ParagonCrunch/FX/Particles/Abilities/Ultimate/FX/P_Crunch_JetFX_Stage_1.P_Crunch_JetFX_Stage_1"), TEXT("FX_LegJet_l"), 1.f);
+        Attach(TEXT("/Game/ParagonCrunch/FX/Particles/Abilities/Ultimate/FX/P_Crunch_JetFX_Stage_1.P_Crunch_JetFX_Stage_1"), TEXT("FX_LegJet_r"), 1.f);
+        Attach(TEXT("/Game/ParagonCrunch/FX/Particles/Abilities/Ultimate/FX/P_Crunch_Heat_Distortion.P_Crunch_Heat_Distortion"), TEXT("FX_UltSteam_Back"), 2.f);
+        Attach(TEXT("/Game/ParagonCrunch/FX/Particles/Abilities/Ultimate/FX/P_Crunch_Heat_Distortion.P_Crunch_Heat_Distortion"), TEXT("Chest"), 1.6f);
         Invoke(Boss, TEXT("RecordCombatQA"), TEXT("overheat_begin"));
     }
 }
 
-// 지쳐서 멈춘다: 비틀거리는 동작으로 VentSeconds 동안 서 있고, 그동안 돌지도 고르지도 않는다. 끝나면 열이 0으로 돌아간다.
+// 지쳐서 멈춘다: 비틀거리기 시작하는 동작과 비틀거리는 동작으로 VentSeconds 동안 서 있고, 그동안 돌지도 고르지도 않는다. 끝나면 열이 0으로 돌아간다.
 bool UBossCombatIntentComponent::TryVent()
 {
     ACharacter* Boss = Cast<ACharacter>(GetOwner());
     UAnimInstance* Anim = Boss && Boss->GetMesh() ? Boss->GetMesh()->GetAnimInstance() : nullptr;
     if (!Anim || bPerforming || !StateIs(Boss, TEXT("Boss.Combat.Ready")) || Number(Boss, TEXT("CurrentHealth")) <= 0) return false;
-    UAnimSequenceBase* Clip = LoadObject<UAnimSequenceBase>(nullptr,
-        TEXT("/Game/ParagonCrunch/Characters/Heroes/Crunch/Animations/Stunned_Loop.Stunned_Loop"), nullptr, LOAD_NoWarn);
-    if (!Clip || !TransitionState(Boss, TEXT("Boss.Combat.Ready"), TEXT("Boss.Combat.Position"), TEXT("과열: 지쳐서 멈춘다"))) return false;
+    if (!TransitionState(Boss, TEXT("Boss.Combat.Ready"), TEXT("Boss.Combat.Position"), TEXT("과열: 지쳐서 멈춘다"))) return false;
     Invoke(Boss, TEXT("StopBossLocomotion"));
     if (AAIController* Controller = Cast<AAIController>(Boss->GetController())) Controller->StopMovement();
     SetFlag(Boss, TEXT("bCombatApproachActive"), false);
@@ -2595,9 +2731,10 @@ bool UBossCombatIntentComponent::TryVent()
     SetFlag(Boss, TEXT("bAttackIntentActive"), true);
     SetFlag(Boss, TEXT("bPostAttackProbePending"), false);
     PostAttackDecisionUntil = 0;
-    PerformMontage = Anim->PlaySlotAnimationAsDynamicMontage(Clip, ActingSlot, .3f, .35f, 1.f, 3, -1.f, 0.f);
+    PerformMontage = nullptr;
     bPerforming = bVenting = true;
     PerformUntil = GetWorld()->GetTimeSeconds() + VentSeconds;
+    PlayExhausted(VentSeconds);
     if (UParticleSystem* Steam = LoadObject<UParticleSystem>(nullptr,
         TEXT("/Game/ParagonCrunch/FX/Particles/Abilities/Ultimate/FX/P_Crunch_JetFX_Stage_2.P_Crunch_JetFX_Stage_2"), nullptr, LOAD_NoWarn))
         VentFX = UGameplayStatics::SpawnEmitterAttached(Steam, Boss->GetMesh(), TEXT("FX_UltSteam_Back"), FVector::ZeroVector, FRotator::ZeroRotator,
@@ -2653,6 +2790,13 @@ void UBossCombatIntentComponent::UpdateSlam(float DeltaTime)
             if (SlamWaveMaterial) SlamWaveMaterial->SetScalarParameterValue(TEXT("Opacity"), 1.f - T);
         }
     }
+    // 착지 뒤: 남은 후딜 동안 지친 동작으로 선다(플레이어가 크게 때리는 시간).
+    if (SlamStunAt >= 0.0 && Now >= SlamStunAt)
+    {
+        SlamStunAt = -1.0;
+        const float Left = UKismetSystemLibrary::K2_GetTimerRemainingTime(Boss, TEXT("FinishCombatAction"));
+        if (StateIs(Boss, TEXT("Boss.Combat.Attack.Recovery")) && Left > .8f) PlayExhausted(Left - .15f);
+    }
     const bool bSlam = static_cast<int32>(Number(Object(Boss, TEXT("ActiveAction")), TEXT("ActionId"), -1)) == 8
         && (StateIs(Boss, TEXT("Boss.Combat.Attack.Telegraph")) || StateIs(Boss, TEXT("Boss.Combat.Attack.Windup")) || StateIs(Boss, TEXT("Boss.Combat.Attack.Active")));
     if (!bSlam)
@@ -2670,6 +2814,7 @@ void UBossCombatIntentComponent::UpdateSlam(float DeltaTime)
             {
                 Spawn(SlamWaveDecal, SlamWaveMaterial, Center, Direct * .6f, FLinearColor(1.f, .55f, .15f, 1.f), 0.f);
                 SlamWaveAt = Now;
+                SlamStunAt = Now + .45;       // 내려찍은 자세가 읽힌 뒤에 비틀거린다
                 if (AActor* Player = UGameplayStatics::GetPlayerPawn(this, 0)) UBossCombatIntentLibrary::PlayPlayerHitShake(Player, 1.8f);
                 Invoke(Boss, TEXT("RecordCombatQA"), TEXT("slam_wave"));
             }
